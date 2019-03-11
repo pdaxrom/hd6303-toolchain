@@ -1,0 +1,58 @@
+;*  SMALL-C HEADER FILE
+
+		ORG	$100
+
+ZVM_BASE	EQU	$C000
+
+fclose		EQU	ZVM_BASE+$104
+fopen		EQU	ZVM_BASE+$108
+getc		EQU	ZVM_BASE+$10C
+getchar		EQU	ZVM_BASE+$110
+gets		EQU	ZVM_BASE+$114
+putc		EQU	ZVM_BASE+$118
+putchar		EQU	ZVM_BASE+$11C
+puts		EQU	ZVM_BASE+$120
+RTSC		EQU	ZVM_BASE+$124
+isalpha		EQU	ZVM_BASE+$128
+isdigit		EQU	ZVM_BASE+$12C
+isalnum		EQU	ZVM_BASE+$130
+islower		EQU	ZVM_BASE+$134
+isupper		EQU	ZVM_BASE+$138
+isspace		EQU	ZVM_BASE+$13C
+toupper		EQU	ZVM_BASE+$140
+tolower		EQU	ZVM_BASE+$144
+strclr		EQU	ZVM_BASE+$148
+strlen		EQU	ZVM_BASE+$14C
+strcpy		EQU	ZVM_BASE+$150
+strcat		EQU	ZVM_BASE+$154
+strcmp		EQU	ZVM_BASE+$158
+exit		EQU	ZVM_BASE+$15C
+fgets		EQU	ZVM_BASE+$160
+fputs		EQU	ZVM_BASE+$164
+fread		EQU	ZVM_BASE+$168
+fwrite		EQU	ZVM_BASE+$16C
+feof		EQU	ZVM_BASE+$170
+fflush		EQU	ZVM_BASE+$174
+fseek		EQU	ZVM_BASE+$178
+ftell		EQU	ZVM_BASE+$17C
+unlink		EQU	ZVM_BASE+$180
+system		EQU	ZVM_BASE+$184
+geterrno	EQU	ZVM_BASE+$188
+getstrerr	EQU	ZVM_BASE+$18C
+EOF		EQU -1
+
+__START		PROC
+		LDAA	#$E8
+		INT	$2E
+		CPX	#0
+		BEQ	ERROR
+		LDX	#__CODE
+		INT	$E8
+		RTS
+ERROR		LDX	#ERRTXT
+		INT	$23
+		RTS
+ERRTXT		DB	'Cannot execute - ZCodeVM not installed.', 10, 0
+		ENDP
+		DS	(__START + $40) - *
+__CODE
