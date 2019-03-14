@@ -39,6 +39,7 @@
 #define HASHSIZE  257
 #define SYMSIZE 17000
 #define PROCSIZE   16
+#define IFDEFSIZE  16
 
 #define NEXTPTR     0
 #define VALUE       2
@@ -47,7 +48,8 @@
 
 #define SYMBLNK 0x80
 #define SYMBLBL 0x40
-#define SYMBCAL	0x20
+#define SYMBCAL 0x20
+#define SYMBDEF 0x10
 
 /*
  * 6800 addressing modes
@@ -127,6 +129,9 @@ char pfile[40];				/* pgm file name */
 char bfile[40];				/* bin file name */
 int relsize;				/* size of reltable */
 
+int ifdefcnt;				/* ifdef stack counter */
+char ifdefstk[IFDEFSIZE];		/* ifdef stack */
+
 main(argc, argv)
 int argc;
 int *argv[];
@@ -197,6 +202,7 @@ int *argv[];
 	filepos = 0;
 	chksumon = 0;
 	errcnt = 0;
+	ifdefcnt = 0;
 	pass = 1;
 	while(pass < 3) {
 		nsect = 0;
@@ -426,14 +432,69 @@ inline_()
  */
 assem()
 {
+	char symbol[LINESIZE];
 	int ismnem;
+	int ifdefval;
+	char *tag;
+	char ifdefcmd;
 
+	ifdefval = 0;
 	flgrel = 0;
 	flgunk = 0;
 
 	ismnem = isspace(*ip);
 
 	if (sym(sbuf)) {
+		if (strcmp(sbuf, ".IFDEF") == 0) {
+			if (sym(symbol)) {
+				tag = hashfind(symbol);
+				if (tag) {
+					if (*(tag + NAME) & SYMBDEF)
+						ifdefval = mgetw(tag + VALUE);
+				}
+			}
+			if ((ifdefcnt > 0) & (ifdefstk[ifdefcnt] > 0))
+			    ifdefcmd = 2;
+			else if (ifdefval == 0)
+			    ifdefcmd = 1;
+			else
+			    ifdefcmd = 0;
+			ifdefstk[++ifdefcnt] = ifdefcmd;
+			return;
+		} else if (strcmp(sbuf, ".IFNDEF") == 0) {
+			if (sym(symbol)) {
+				tag = hashfind(symbol);
+				if (tag) {
+					if (*(tag + NAME) & SYMBDEF)
+						ifdefval = mgetw(tag + VALUE);
+				}
+			}
+			if ((ifdefcnt > 0) & (ifdefstk[ifdefcnt] > 0))
+			    ifdefcmd = 2;
+			else if (ifdefval != 0)
+			    ifdefcmd = 1;
+			else
+			    ifdefcmd = 0;
+			ifdefstk[++ifdefcnt] = ifdefcmd;
+			return;
+		} else if (strcmp(sbuf, ".ELSE") == 0) {
+			if (ifdefstk[ifdefcnt] < 2) {
+				if (ifdefstk[ifdefcnt] == 1)
+					ifdefstk[ifdefcnt] = 0;
+				else
+					ifdefstk[ifdefcnt] = 1;
+			}
+			return;
+		} else if (strcmp(sbuf, ".ENDIF") == 0) {
+			ifdefcnt--;
+			return;
+		}
+
+		if (ifdefcnt > 0) {
+			if (ifdefstk[ifdefcnt])
+				return;
+		}
+
 		if (ismnem == 0) {
 			qlabel();
 			if (sym(sbuf)) {
@@ -489,6 +550,13 @@ prehash()
 	installop("ERROR",	chkerr| 0x8000);
 	installop("LIST",	listop| 0x8000);
 	installop("TRUNC",	trunop| 0x8000);
+/*	installop(".IFDEF",	difdef| 0x8000);
+	installop(".IFNDEF",	difndef|0x8000);
+	installop(".ELSE",	delse | 0x8000);
+	installop(".ENDIF",	dendif| 0x8000);
+*/
+	installop(".DEFINE",	ddefine|0x8000);
+	installop(".UNDEF",	dundef| 0x8000);
 
 	start = freeptr;
 }
@@ -1065,6 +1133,36 @@ chkonoff()
 	error("Only ON or OFF allowed.");
 }
 
+ddefine()
+{
+	char *tag;
+	if (pass == 1) {
+		if (sym(sbuf)) {
+			tag = install(sbuf, 1);
+			*(tag + NAME) = *(tag + NAME) | SYMBDEF;
+			return 0;
+		}
+		error("Symbol missed.");
+	}
+}
+
+dundef()
+{
+	char *tag;
+	if (pass == 1) {
+		if (sym(sbuf)) {
+			if ((tag = hashfind(sbuf)) >= start) {
+				if (*(tag + NAME) & SYMBDEF) {
+					mputw(tag + VALUE, 0);
+					return 0;
+				}
+			}
+			error("Symbol not defined.");
+		}
+		error("Symbol missed.");
+	}
+}
+
 locsuffix(str, cnt)
 char *str;
 int cnt;
@@ -1368,7 +1466,7 @@ character()
  * get next symbol
  * ---------------
  * copy alpha prefixed alphanumeric string from input buffer
- * accepts underline and tilde as alpha prefix
+ * accepts underline, tilde and point as alpha prefix
  * returns length of string
  */
 sym(p)
@@ -1379,7 +1477,7 @@ char *p;
 	skip();
 	bp = p;
 
-	if (isalpha(*ip) | *ip == '_' | *ip == ':') {
+	if (isalpha(*ip) | *ip == '_' | *ip == ':' | *ip == '.') {
 		*bp++ = *ip++;
 		while (isalnum(*ip) | *ip == '_')
 			*bp++ = *ip++;
