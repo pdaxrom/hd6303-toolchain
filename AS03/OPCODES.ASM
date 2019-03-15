@@ -58,7 +58,9 @@ memtabl
 	DB	"DES", 10
 	DB	"DEX", 10
 	DB	"EORA", 10
+	DB	"XORA", 10
 	DB	"EORB", 10
+	DB	"XORB", 10
 	DB	"INC", 10
 	DB	"INCA", 10
 	DB	"INCB", 10
@@ -68,7 +70,9 @@ memtabl
 	DB	"JMP", 10
 	DB	"JSR", 10
 	DB	"LDAA", 10
+	DB	"LDA", 10
 	DB	"LDAB", 10
+	DB	"LDB", 10
 	DB	"LDD", 10
 	DB	"LDS", 10
 	DB	"LDX", 10
@@ -86,12 +90,18 @@ memtabl
 	DB	"NEGB", 10
 	DB	"NOP", 10
 	DB	"ORAA", 10
+	DB	"ORA", 10
 	DB	"ORAB", 10
+	DB	"ORB", 10
 	DB	"PSHA", 10
+	DB	"PHA", 10
 	DB	"PSHB", 10
+	DB	"PHB", 10
 	DB	"PSHX", 10
 	DB	"PULA", 10
+	DB	"PLA", 10
 	DB	"PULB", 10
+	DB	"PLB", 10
 	DB	"PULX", 10
 	DB	"ROL", 10
 	DB	"ROLA", 10
@@ -109,7 +119,9 @@ memtabl
 	DB	"SEV", 10
 	DB	"SLP", 10
 	DB	"STAA", 10
+	DB	"STA", 10
 	DB	"STAB", 10
+	DB	"STB", 10
 	DB	"STD", 10
 	DB	"STS", 10
 	DB	"STX", 10
@@ -195,7 +207,9 @@ opcodes
 	DB	$00, $34, $00, $00, $00, $00, $00	;DES
 	DB	$00, $09, $00, $00, $00, $00, $00	;DEX
 	DB	$00, $00, $88, $98, $B8, $A8, $00	;EORA
+	DB	$00, $00, $88, $98, $B8, $A8, $00	;XORA
 	DB	$00, $00, $C8, $D8, $F8, $E8, $00	;EORB
+	DB	$00, $00, $C8, $D8, $F8, $E8, $00	;XORB
 	DB	$00, $00, $00, $00, $7C, $6C, $00	;INC
 	DB	$00, $4C, $00, $00, $00, $00, $00	;INCA
 	DB	$00, $5C, $00, $00, $00, $00, $00	;INCB
@@ -205,7 +219,9 @@ opcodes
 	DB	$00, $00, $00, $00, $7E, $6E, $00	;JMP
 	DB	$00, $00, $00, $9D, $BD, $AD, $00	;JSR
 	DB	$00, $00, $86, $96, $B6, $A6, $00	;LDAA
+	DB	$00, $00, $86, $96, $B6, $A6, $00	;LDA
 	DB	$00, $00, $C6, $D6, $F6, $E6, $00	;LDAB
+	DB	$00, $00, $C6, $D6, $F6, $E6, $00	;LDB
 	DB	$01, $00, $CC, $DC, $FC, $EC, $00	;LDD
 	DB	$01, $00, $8E, $9E, $BE, $AE, $00	;LDS
 	DB	$01, $00, $CE, $DE, $FE, $EE, $00	;LDX
@@ -223,12 +239,18 @@ opcodes
 	DB	$00, $50, $00, $00, $00, $00, $00	;NEGB
 	DB	$00, $01, $00, $00, $00, $00, $00	;NOP
 	DB	$00, $00, $8A, $9A, $BA, $AA, $00	;ORAA
+	DB	$00, $00, $8A, $9A, $BA, $AA, $00	;ORA
 	DB	$00, $00, $CA, $DA, $FA, $EA, $00	;ORAB
+	DB	$00, $00, $CA, $DA, $FA, $EA, $00	;ORB
 	DB	$00, $36, $00, $00, $00, $00, $00	;PSHA
+	DB	$00, $36, $00, $00, $00, $00, $00	;PHA
 	DB	$00, $37, $00, $00, $00, $00, $00	;PSHB
+	DB	$00, $37, $00, $00, $00, $00, $00	;PHB
 	DB	$00, $3C, $00, $00, $00, $00, $00	;PSHX
 	DB	$00, $32, $00, $00, $00, $00, $00	;PULA
+	DB	$00, $32, $00, $00, $00, $00, $00	;PLA
 	DB	$00, $33, $00, $00, $00, $00, $00	;PULB
+	DB	$00, $33, $00, $00, $00, $00, $00	;PLB
 	DB	$00, $38, $00, $00, $00, $00, $00	;PULX
 	DB	$00, $00, $00, $00, $79, $69, $00	;ROL
 	DB	$00, $49, $00, $00, $00, $00, $00	;ROLA
@@ -246,7 +268,9 @@ opcodes
 	DB	$00, $0B, $00, $00, $00, $00, $00	;SEV
 	DB	$00, $1A, $00, $00, $00, $00, $00	;SLP
 	DB	$00, $00, $00, $97, $B7, $A7, $00	;STAA
+	DB	$00, $00, $00, $97, $B7, $A7, $00	;STA
 	DB	$00, $00, $00, $D7, $F7, $E7, $00	;STAB
+	DB	$00, $00, $00, $D7, $F7, $E7, $00	;STB
 	DB	$00, $00, $00, $DD, $FD, $ED, $00	;STD
 	DB	$00, $00, $00, $9F, $BF, $AF, $00	;STS
 	DB	$00, $00, $00, $DF, $FF, $EF, $00	;STX

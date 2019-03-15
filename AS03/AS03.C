@@ -37,7 +37,7 @@
  */
 #define LINESIZE  128
 #define HASHSIZE  257
-#define SYMSIZE 17000
+#define SYMSIZE 20000
 #define PROCSIZE   16
 #define IFDEFSIZE  16
 
@@ -95,6 +95,7 @@ int list;				/* produce assembler listing */
 int pass;				/* pass 1/2 */
 int nbytes;				/* number of bytes in obj[] */
 int errcnt;				/* error count */
+int warncnt;				/* warning count */
 int nset;				/* number of setloc pseudo-ops */
 
 int nsect;				/* section pseudo-op */
@@ -202,9 +203,10 @@ int *argv[];
 	filepos = 0;
 	chksumon = 0;
 	errcnt = 0;
-	ifdefcnt = 0;
+	warncnt = 0;
 	pass = 1;
 	while(pass < 3) {
+		ifdefcnt = 0;
 		nsect = 0;
 		nproc = 0;
 		nset = 0;
@@ -306,6 +308,10 @@ int *argv[];
 	if (outlst > 2)
 		fclose(outlst);
 
+	if (warncnt) {
+		printf("unias: %d warnings\n", warncnt);
+	}
+
 	if (errcnt) {
 		printf("unias: %d errors\n", errcnt);
 		exit(-1);
@@ -347,6 +353,10 @@ doasm()
 	*ibuf = 0;
 	while (1) {
 		if (inline_() == NULL) {
+		    if (ifdefcnt != 0) {
+				warning("Non paired condition directives.");
+				ifdefcnt = 0;
+		    }
 		    if (in2) {
 			fclose(in);
 			in = in2;
@@ -400,8 +410,15 @@ inline_()
 	c = strlen(ibuf);
 	if (c > 0) {
 		ip = p + c - 1;
-		if (*ip != 10 & *ip != 13)
-			error("Line too long.");
+		if (*ip != 10 & *ip != 13 & *ip != 0x1a) {
+			if (c == LINESIZE - 1)
+				warning("Line too long (%d).", c);
+			else {
+				warning("No new line.");
+				*++ip = 10;
+				*++ip = 0;
+			}
+		}
 	}
 
 	ip = p;
@@ -411,7 +428,7 @@ inline_()
 	while (c = toupper(*p)) {
 		if (c == ';')
 			break;
-		else if (c == 13) {
+		else if ((c == 13) | (c == 0x1a)) {
 		    *p++ = 10;
 		    *p++ = 0;
 		    break;
@@ -432,69 +449,14 @@ inline_()
  */
 assem()
 {
-	char symbol[LINESIZE];
 	int ismnem;
-	int ifdefval;
-	char *tag;
-	char ifdefcmd;
 
-	ifdefval = 0;
 	flgrel = 0;
 	flgunk = 0;
 
 	ismnem = isspace(*ip);
 
 	if (sym(sbuf)) {
-		if (strcmp(sbuf, ".IFDEF") == 0) {
-			if (sym(symbol)) {
-				tag = hashfind(symbol);
-				if (tag) {
-					if (*(tag + NAME) & SYMBDEF)
-						ifdefval = mgetw(tag + VALUE);
-				}
-			}
-			if ((ifdefcnt > 0) & (ifdefstk[ifdefcnt] > 0))
-			    ifdefcmd = 2;
-			else if (ifdefval == 0)
-			    ifdefcmd = 1;
-			else
-			    ifdefcmd = 0;
-			ifdefstk[++ifdefcnt] = ifdefcmd;
-			return;
-		} else if (strcmp(sbuf, ".IFNDEF") == 0) {
-			if (sym(symbol)) {
-				tag = hashfind(symbol);
-				if (tag) {
-					if (*(tag + NAME) & SYMBDEF)
-						ifdefval = mgetw(tag + VALUE);
-				}
-			}
-			if ((ifdefcnt > 0) & (ifdefstk[ifdefcnt] > 0))
-			    ifdefcmd = 2;
-			else if (ifdefval != 0)
-			    ifdefcmd = 1;
-			else
-			    ifdefcmd = 0;
-			ifdefstk[++ifdefcnt] = ifdefcmd;
-			return;
-		} else if (strcmp(sbuf, ".ELSE") == 0) {
-			if (ifdefstk[ifdefcnt] < 2) {
-				if (ifdefstk[ifdefcnt] == 1)
-					ifdefstk[ifdefcnt] = 0;
-				else
-					ifdefstk[ifdefcnt] = 1;
-			}
-			return;
-		} else if (strcmp(sbuf, ".ENDIF") == 0) {
-			ifdefcnt--;
-			return;
-		}
-
-		if (ifdefcnt > 0) {
-			if (ifdefstk[ifdefcnt])
-				return;
-		}
-
 		if (ismnem == 0) {
 			qlabel();
 			if (sym(sbuf)) {
@@ -550,11 +512,10 @@ prehash()
 	installop("ERROR",	chkerr| 0x8000);
 	installop("LIST",	listop| 0x8000);
 	installop("TRUNC",	trunop| 0x8000);
-/*	installop(".IFDEF",	difdef| 0x8000);
+	installop(".IFDEF",	difdef| 0x8000);
 	installop(".IFNDEF",	difndef|0x8000);
 	installop(".ELSE",	delse | 0x8000);
 	installop(".ENDIF",	dendif| 0x8000);
-*/
 	installop(".DEFINE",	ddefine|0x8000);
 	installop(".UNDEF",	dundef| 0x8000);
 
@@ -573,13 +534,23 @@ qlabel()
 
 	tag = 0;
 
-	if (nproc) {
+/* LABEL = XXX Always global - UniCROSS compatibility */
+	if (match('='))
+		ip--;
+	else if (nproc) {
 		if (pass == 1) {
 			if ((tag = hashfind(sbuf)) < procsym[nproc])
 				tag = 0;
 		}
 		locsuffix(sbuf, nloc[nproc]);
 	}
+
+	if (ifdefcnt > 0) {
+		if (ifdefstk[ifdefcnt])
+			return;
+	}
+
+
 	if (pass == 1)
 		return(putlab(tag));
 	else
@@ -685,6 +656,17 @@ char *tag;
 qmnem()
 {
 	char *tag;
+
+	if (ifdefcnt > 0) {
+		if ((strcmp(sbuf, ".ELSE") != 0) &
+		    (strcmp(sbuf, ".ENDIF") != 0) &
+		    (strcmp(sbuf, ".IFDEF") != 0) &
+		    (strcmp(sbuf, ".IFNDEF") != 0)) {
+			if (ifdefstk[ifdefcnt])
+				return;
+		}
+	}
+
 	*sbuf = 0x7F ^ *sbuf;
 	if ((tag = hashfind(sbuf)) < start) {
 		mnem(tag);
@@ -1005,9 +987,12 @@ file()
 
 	skip();
 	bp = sbuf;
-	while (*ip != ' ' & *ip != 10) /* '\n' */
+	while ((isspace(*ip) == 0) & (*ip != ';')) /* '\n' */
 		*bp++ = *ip++;
 	*bp = 0; /* '\0' */
+
+	printf("\nInclude %s\n", sbuf);
+
 	if ((in = fopen(sbuf, "r")) == NULL) {
 		linecnt = linecnt2;
 		printf("unias: Cannot open %s\n", sbuf);
@@ -1161,6 +1146,71 @@ dundef()
 		}
 		error("Symbol missed.");
 	}
+}
+
+difdef()
+{
+	char symbol[LINESIZE];
+	int ifdefval;
+	char *tag;
+	char ifdefcmd;
+
+	ifdefval = 0;
+
+	if (sym(symbol)) {
+		tag = hashfind(symbol);
+		if (tag) {
+			if (*(tag + NAME) & SYMBDEF)
+				ifdefval = mgetw(tag + VALUE);
+		}
+	}
+	if ((ifdefcnt > 0) & (ifdefstk[ifdefcnt] > 0))
+		ifdefcmd = 2;
+	else if (ifdefval == 0)
+		ifdefcmd = 1;
+	else
+		ifdefcmd = 0;
+	ifdefstk[++ifdefcnt] = ifdefcmd;
+}
+
+difndef()
+{
+	char symbol[LINESIZE];
+	int ifdefval;
+	char *tag;
+	char ifdefcmd;
+
+	ifdefval = 0;
+
+	if (sym(symbol)) {
+		tag = hashfind(symbol);
+		if (tag) {
+			if (*(tag + NAME) & SYMBDEF)
+				ifdefval = mgetw(tag + VALUE);
+		}
+	}
+	if ((ifdefcnt > 0) & (ifdefstk[ifdefcnt] > 0))
+		ifdefcmd = 2;
+	else if (ifdefval != 0)
+		ifdefcmd = 1;
+	else
+		ifdefcmd = 0;
+	ifdefstk[++ifdefcnt] = ifdefcmd;
+}
+
+delse()
+{
+	if (ifdefstk[ifdefcnt] < 2) {
+		if (ifdefstk[ifdefcnt] == 1)
+			ifdefstk[ifdefcnt] = 0;
+		else
+			ifdefstk[ifdefcnt] = 1;
+	}
+}
+
+dendif()
+{
+	ifdefcnt--;
 }
 
 locsuffix(str, cnt)
@@ -1346,9 +1396,10 @@ char *name;
 		tag = hashfind(name);
 
 	if (pass == 2) {
-		if (tag == 0)
+		if (tag == 0) {
+			printf("SYMBOL>>>>[%s]\n", name);
 			error("symbol undefined");
-		else if (tag < start)
+		} else if (tag < start)
 			error("illegal symbol");
 	}
 	if (tag == 0) {
@@ -1443,8 +1494,12 @@ binary()
 		return(ERROR);
 	else {
 		n = 0;
-		while (*ip == '0' | *ip == '1')
-			n = n * 2 + *ip++ - '0';
+		while (*ip == '0' | *ip == '1' | *ip == '_') {
+			if (*ip == '_') {
+				ip++;
+			} else
+				n = n * 2 + *ip++ - '0';
+		}
 		return(n);
 	}
 }
@@ -1572,6 +1627,38 @@ int mem;
 			putc(obj[n++], out);
 		}
 	}
+}
+
+/*
+ * print warning message
+ * -------------------
+ * use stdout, so warning appear in listing
+ */
+warning(message)
+char *message;
+{
+	char *p;
+
+	p = ibuf;
+	while (*p) {
+	    if (*p == 10) {
+		*p = 0;
+		break;
+	    }
+	    p++;
+	}
+
+	warning1(stdout, message);
+	if (outlst != stdout)
+		warning1(outlst, message);
+}
+
+warning1(fd, message)
+int fd;
+char *message;
+{
+	fprintf(fd, "Warning: %s\n", message);
+	fprintf(fd, "Line %d: %s\n", linecnt, ibuf);
 }
 
 /*
