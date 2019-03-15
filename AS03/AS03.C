@@ -139,6 +139,8 @@ int *argv[];
 {
 	int file;			/* source file no. */
 	char *ifile;
+	char *tag;
+	int fpos[2];
 
 	in = NULL;
 	in2 = NULL;
@@ -150,17 +152,38 @@ int *argv[];
 	list = FALSE;			/* default no listing */
 	bintype = BIN_PGM;
 	outpgm = NULL;
-	int fpos[2];
 
 	printf("AS03 - MC6801/HD6303 Assembler\n");
 
 	if (argc < 2)
 		usage();
 
+	endsym = symtab + SYMSIZE;
+	inithash();
+	prehash();
+
 	--argc;
 	argv++;
 	while (argc > 0) {
-		if (strcmp(argv[0], "-l") == SAME) {
+		if (strcmp(argv[0], "-D") == SAME) {
+			if (argc < 2)
+				usage();
+			else {
+				tag = install(argv[1], 1);
+				*(tag + NAME) = *(tag + NAME) | SYMBDEF;
+				--argc;
+				argv++;
+			}
+/*		} else 	if (strcmp(argv[0], "-U") == SAME) {
+			if (argc < 2)
+				usage();
+			else {
+				tag = install(argv[1], 0);
+				*(tag + NAME) = *(tag + NAME) | SYMBDEF;
+				--argc;
+				argv++;
+			} */
+		} else if (strcmp(argv[0], "-l") == SAME) {
 			list++;
 			if (argc > 3) {
 				lfile = argv[1];
@@ -195,10 +218,6 @@ int *argv[];
 		if ((outlst = fopen(lfile, IO_W)) == NULL)
 			printf("unias: Cannot open %s\n", lfile);
 	}
-
-	endsym = symtab + SYMSIZE;
-	inithash();
-	prehash();
 
 	filepos = 0;
 	chksumon = 0;
