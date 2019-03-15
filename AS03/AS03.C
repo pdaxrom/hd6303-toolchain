@@ -40,6 +40,7 @@
 #define SYMSIZE 20000
 #define PROCSIZE   16
 #define IFDEFSIZE  16
+#define INCFISIZE  16
 
 #define NEXTPTR     0
 #define VALUE       2
@@ -87,8 +88,7 @@ char * _end;				/* end of program */
 char * textsz;				/* size of text segment */
 char * datasz;				/* size of data segment */
 int hashtab[HASHSIZE];			/* hash table */
-FILE *in;				/* input stream */
-FILE *in2;				/* second input stream */
+FILE *in[INCFISIZE];			/* input stream */
 FILE *out;				/* output stream */
 int endflag;				/* .end pseudo-op flag */
 int list;				/* produce assembler listing */
@@ -96,6 +96,9 @@ int pass;				/* pass 1/2 */
 int nbytes;				/* number of bytes in obj[] */
 int errcnt;				/* error count */
 int warncnt;				/* warning count */
+
+int incnt;				/* input files counter */
+
 int nset;				/* number of setloc pseudo-ops */
 
 int nsect;				/* section pseudo-op */
@@ -116,8 +119,7 @@ int csumval;				/* checksum value */
 char *chkpos;				/* checksum file position */
 char *filepos;				/* output file size */
 
-int linecnt;				/* lines counter */
-int linecnt2;				/* include lines counter */
+int linecnt[INCFISIZE];			/* lines counter */
 int linestot;				/* total lines */
 
 int bintype;				/* output binary type */
@@ -142,8 +144,6 @@ int *argv[];
 	char *tag;
 	int fpos[2];
 
-	in = NULL;
-	in2 = NULL;
 	out = NULL;
 	outlst = stdout;
 	ifile = NULL;
@@ -225,6 +225,7 @@ int *argv[];
 	warncnt = 0;
 	pass = 1;
 	while(pass < 3) {
+		incnt = 0;
 		ifdefcnt = 0;
 		nsect = 0;
 		nproc = 0;
@@ -234,12 +235,12 @@ int *argv[];
 		endflag = FALSE;
 		liston = 1;
 		truncon = 1;
-		linecnt = 0;
+		linecnt[incnt] = 0;
 		linestot = 0;
 
 		printf("--- Pass %d ---\n", pass);
 
-		if ((in = fopen(ifile, "r")) == NULL) {
+		if ((in[incnt] = fopen(ifile, "r")) == NULL) {
 			printf("unias: Cannot open %s\n", ifile);
 			fatal(-1);
 		}
@@ -272,9 +273,7 @@ int *argv[];
 		}
 
 		doasm();
-		fclose(in);
-
-/*		recalc(); */
+		fclose(in[0]);
 
 		pass++;
 	}
@@ -376,11 +375,8 @@ doasm()
 				warning("Non paired condition directives.");
 				ifdefcnt = 0;
 		    }
-		    if (in2) {
-			fclose(in);
-			in = in2;
-			in2 = NULL;
-			linecnt = linecnt2;
+		    if (incnt > 0) {
+			fclose(in[incnt--]);
 			continue;
 		    } else
 			break;
@@ -407,8 +403,8 @@ inline_()
 	int c;
 	char *p;
 
-	while ((p = fgets(ibuf, LINESIZE, in)) != NULL) {
-		linecnt++;
+	while ((p = fgets(ibuf, LINESIZE, in[incnt])) != NULL) {
+		linecnt[incnt]++;
 		linestot++;
 
 		if (list == 0 |
@@ -452,9 +448,11 @@ inline_()
 		    *p++ = 0;
 		    break;
 		} else if (c == '"' | c == 0x27) {
-			while (*++p)
+			while (*++p) {
 				if (*p == c)
 					break;
+			}
+			p++;
 		}
 		else
 			*p++ = c;
@@ -995,14 +993,10 @@ file()
 {
 	char *bp;
 
-	if (in2) {
-	    printf("unias: Cannot nest include files\n");
+	if (incnt + 1 == INCFISIZE) {
+	    printf("unias: Maximum nested include files reached.\n");
 	    fatal(-1);
 	}
-
-	in2 = in;
-	linecnt2 = linecnt;
-	linecnt = 0;
 
 	skip();
 	bp = sbuf;
@@ -1012,11 +1006,12 @@ file()
 
 	printf("\nInclude %s\n", sbuf);
 
-	if ((in = fopen(sbuf, "r")) == NULL) {
-		linecnt = linecnt2;
+	if ((in[++incnt] = fopen(sbuf, "r")) == NULL) {
 		printf("unias: Cannot open %s\n", sbuf);
 		fatal(-1);
 	}
+
+	linecnt[incnt] = 0;
 }
 
 psend()
@@ -1607,7 +1602,7 @@ int mem;
 	char incl;
 	char *ptr;
 
-	if (in2) incl = '>';
+	if (incnt > 0) incl = '>';
 	else incl = ' ';
 
 	if (list & liston) {
@@ -1677,7 +1672,7 @@ int fd;
 char *message;
 {
 	fprintf(fd, "Warning: %s\n", message);
-	fprintf(fd, "Line %d: %s\n", linecnt, ibuf);
+	fprintf(fd, "Line %d: %s\n", linecnt[incnt], ibuf);
 }
 
 /*
@@ -1716,7 +1711,7 @@ int fd;
 char *message;
 {
 	fprintf(fd, "Error: %s\n", message);
-	fprintf(fd, "Line %d: %s\n", linecnt, ibuf);
+	fprintf(fd, "Line %d: %s\n", linecnt[incnt], ibuf);
 }
 
 error2(fd)
@@ -1731,10 +1726,12 @@ int fd;
 fatal(stat)
 int stat;				/* exit status */
 {
-	if (in != NULL)
-		fclose(in);
-	if (in2 != NULL)
-		fclose(in2);
+	while (incnt > 0) {
+	    fclose(in[incnt--]);
+	}
+
+	fclose(in[0]);
+
 	if (out != NULL)
 		fclose(out);
 	if (outpgm != NULL);
