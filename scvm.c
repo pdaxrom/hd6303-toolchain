@@ -174,7 +174,8 @@ void chkfunc(word *sp, word *pc, word *reg)
 	case f_strcpy:
 		tmp1 = GETARG1();
 		tmp = GETARG2();
-		strcpy((char *)&mem[tmp], (char *)&mem[tmp1]);
+		// GCC 9 - no overlap in strcpy
+		memmove((char *)&mem[tmp], (char *)&mem[tmp1], strlen((char *)&mem[tmp1]) + 1);
 		*reg = tmp;
 		break;
 	case f_strcat:
