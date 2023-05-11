@@ -134,6 +134,7 @@ int relsize;				/* size of reltable */
 
 int ifdefcnt;				/* ifdef stack counter */
 char ifdefstk[IFDEFSIZE];		/* ifdef stack */
+char ignotdef;				/* undefined symbol return 0 */
 
 main(argc, argv)
 int argc;
@@ -153,7 +154,7 @@ int *argv[];
 	bintype = BIN_PGM;
 	outpgm = NULL;
 
-	printf("AS03 - MC6801/HD6303 Assembler\n");
+	printf("HD6303 Assembler v1.1\n");
 
 	if (argc < 2)
 		usage();
@@ -227,6 +228,7 @@ int *argv[];
 	while(pass < 3) {
 		incnt = 0;
 		ifdefcnt = 0;
+		ignotdef = 0;
 		nsect = 0;
 		nproc = 0;
 		nset = 0;
@@ -529,6 +531,7 @@ prehash()
 	installop("ERROR",	chkerr| 0x8000);
 	installop("LIST",	listop| 0x8000);
 	installop("TRUNC",	trunop| 0x8000);
+	installop(".IF",	dif   | 0x8000);
 	installop(".IFDEF",	difdef| 0x8000);
 	installop(".IFNDEF",	difndef|0x8000);
 	installop(".ELSE",	delse | 0x8000);
@@ -677,6 +680,7 @@ qmnem()
 	if (ifdefcnt > 0) {
 		if ((strcmp(sbuf, ".ELSE") != 0) &
 		    (strcmp(sbuf, ".ENDIF") != 0) &
+		    (strcmp(sbuf, ".IF") != 0) &
 		    (strcmp(sbuf, ".IFDEF") != 0) &
 		    (strcmp(sbuf, ".IFNDEF") != 0)) {
 			if (ifdefstk[ifdefcnt])
@@ -1162,6 +1166,27 @@ dundef()
 	}
 }
 
+dif()
+{
+	char symbol[LINESIZE];
+	int val;
+	char *tag;
+	char ifdefcmd;
+
+	ignotdef = 1;
+	val = exp_();
+	ignotdef = 0;
+
+	if ((ifdefcnt > 0) & (ifdefstk[ifdefcnt] > 0))
+		ifdefcmd = 2;
+	else if (val == 0)
+		ifdefcmd = 1;
+	else
+		ifdefcmd = 0;
+	ifdefstk[++ifdefcnt] = ifdefcmd;
+}
+
+
 difdef()
 {
 	char symbol[LINESIZE];
@@ -1411,7 +1436,9 @@ char *name;
 
 	if (pass == 2) {
 		if (tag == 0) {
-			printf("SYMBOL>>>>[%s]\n", name);
+			if (ignotdef)
+			    return 0;
+			printf("[%s] ", name);
 			error("symbol undefined");
 		} else if (tag < start)
 			error("illegal symbol");
