@@ -212,9 +212,6 @@ int *argv[];
 
 	ifile = argv[0];
 
-	if (ofile == NULL)
-		ofile = ifile;
-
 	if (lfile) {
 		if ((outlst = fopen(lfile, IO_W)) == NULL)
 			printf("unias: Cannot open %s\n", lfile);
@@ -249,7 +246,10 @@ int *argv[];
 
 		if (pass == 2) {
 			if (bintype == BIN_PGM) {
-				addext(pfile, ofile, ".PGM");
+				if (ofile)
+				    strcpy(pfile, ofile);
+				else
+				    addext(pfile, ifile, ".PGM");
 
 				if ((outpgm = fopen(pfile, "w+")) == NULL) {
 					printf("unias: Cannot open %s\n", pfile);
@@ -263,10 +263,14 @@ int *argv[];
 				outword(0x0000); /* data size */
 				outword(0x0000);
 				outword(0x0000);
-				addext(bfile, ofile, ".TMP");
+				addext(bfile, ifile, ".TMP");
 				relsize = 0;
-			} else
-				addext(bfile, ofile, ".CMD");
+			} else {
+				if (ofile)
+					strcpy(bfile, ofile);
+				else
+					addext(bfile, ifile, ".CMD");
+			}
 
 			if ((out = fopen(bfile, "w+")) == NULL) {
 				printf("unias: Cannot open %s\n", bfile);
