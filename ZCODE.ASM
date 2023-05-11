@@ -1,6 +1,6 @@
-	include ../../DEVMAP.INC
+;	include ../../DEVMAP.INC
 
-	include ../UNI/MEMORY.INC
+;	include ../UNI/MEMORY.INC
 
 ; NAM SMALL-C INTERPRETER
 ; OPT NOP,NOG
