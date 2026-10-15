@@ -165,6 +165,14 @@ paths, and 65535 bytes per OBJ or combined program memory. Library file
 positions are 32-bit, so a LIB can exceed 64 KiB. CMD does not allocate BSS;
 the application must check and reserve its own data memory.
 
+`-m APP.MAP` writes a textual link map (module code/BSS ranges and public
+symbols). It is optional metadata and does not change the PGM. BSS-only
+modules are included. `-b -o COMBINED.PGM PREFIX.PGM CHILD.PGM` concatenates
+validated, complete PGM files for a streaming bootstrap. The prefix remains
+an ordinary loadable PGM; the bootstrap loads the following child itself.
+Each header and relocation table is preserved byte-for-byte. Both options
+are implemented in the native linker and work equally on all platforms.
+
 UniAR uses the original 0BB0 UniLIB format, preserving each member OBJ
 byte-for-byte. Operations are `r` create/replace, `a` append without replacing,
 `d` delete, `t` list and `x` extract. Member names are uppercase, eight
@@ -194,3 +202,25 @@ Its PGM outputs with byte-only relocations may contain harmless padding
 between the relocation table and code. Tests compare loaded code, relocation
 entries, entry point and BSS in that case. The separate no-internal-relocation
 library case has identical loaded contents; UniLD correctly links both kinds.
+
+## UniAS memory with resident HG
+
+The FPGA UNIAS.CMD reserves 13000 bytes of conventional symbol storage.
+Its overflow pool uses the unused CC10..DEFF range in the same pinned VM
+bank (4848 bytes); it does not allocate another RAMMAN bank. Both CPU ROMs
+advertise this writable scratch area with a VW/version-1 descriptor at CC00.
+The interpreter rejects a build that would overlap the descriptor.
+The arena is temporary, shared by invocations, and is not preserved across
+nested VM applications. UniAS does not invoke child C applications.
+
+Host and default/Lilith UniAS retain 16200 bytes in conventional RAM. The
+EPROM target does not advertise writable ROM storage. Older FPGA VM ROMs
+remain usable for smaller assemblies with the 13000-byte main pool; update
+both FPGA ROM files and reload/reset the resident VM for large assemblies.
+The symbol walks, PUBLIC/EXTERN output and BSS rebasing handle both pools.
+
+The FPGA HG regression mounts the real resident HG.PGM against the C host
+folder backend, loads the VM and tools from HG/CVM, and compares all OBJ,
+LIB and PGM outputs with cross builds. It also assembles XONIX directly and
+as modules while checking that the VM-bank pool is used and its descriptor
+is intact. This catches a CMD that fits on SD but cannot load alongside HG.

@@ -6,7 +6,8 @@ char paths[1024], members[2048], globals[10752];
 char mf[256], mpub[256], mext[256], selected[256], walked[256];
 int mh[256], ml[256], mlen[256], mc[256], md[256], mo[256];
 int me[256], mg[256], cb[256], db[256], cache[255];
-int nfiles,nmods,nglobal,rootmod,cmdmode,pageflag;
+int nfiles,nmods,nglobal,rootmod,cmdmode,pageflag,bundlemode;
+char mapfile[32], maptmp[32];
 int textlen,datalen,changed,rtype,rvalue,roff,relcount;
 char outfile[32], codefile[32], finaltmp[32], inputnm[32];
 char namebuf[16], member[8], header[32];
@@ -25,6 +26,9 @@ int argc,*argv[];
   if (strcmp(p,"-o")==0) {
    if (i==argc) die("Missing output path");
    pathcpy(outfile,argv[i++]);
+  } else if (strcmp(p,"-m")==0) {
+   if (i==argc) die("Missing map path");
+   pathcpy(mapfile,argv[i++]);
   } else if (*p=='/' | *p=='-') {
    p++;
    if (*p==0) die("Empty option");
@@ -32,12 +36,14 @@ int argc,*argv[];
     iopos[0]=tolower(*p++);
     if (iopos[0]=='c') cmdmode=1;
     else if (iopos[0]=='p') pageflag=1;
+    else if (iopos[0]=='b') bundlemode=1;
     else die("Unknown linker option");
    }
   } else if (*p=='@') argsfile(p+1);
   else addinput(p);
  }
- if (nmods==0) die("unild [/c] [/p] [-o output] objects/libs");
+ if (bundlemode) { bundlepgm(); exit(0); }
+ if (nmods==0) die("unild [/c] [/p] [-m map] [-o output] objects/libs");
  if (rootmod<0) die("No entry point");
  selected[rootmod]=1;
  changed=1;
@@ -86,7 +92,10 @@ int argc,*argv[];
   entry=add16(cb[rootmod],me[rootmod]);
   ww(out,entry); ww(out,datalen); ww(out,0); ww(out,0);
  }
- ioclose(out); publish(finaltmp,outfile);
+ ioclose(out);
+ if (*mapfile) writemap();
+ publish(finaltmp,outfile);
+ if (*mapfile) publish(maptmp,mapfile);
  puts(outfile); numout(textlen); puts(" bytes code");
  numout(datalen); puts(" bytes BSS");
  exit(0);
@@ -124,6 +133,10 @@ addinput(path)
 char *path;
 {
  int f,i,hi,lo,bytes,nh,nl,count;
+ if (bundlemode) {
+  if (nfiles==32) die("More than 32 input files");
+  defaultx(paths+nfiles*32,path,".PGM"); nfiles++; return;
+ }
  defaultx(inputnm,path,".OBJ");
  if (exists(inputnm)==0) extension(inputnm,path,".LIB");
  i=0;
@@ -368,4 +381,105 @@ int m,code,out;
   i++;
  }
  ioclose(f);
+}
+
+/* Link maps are metadata only; PGM code/BSS and relocation formats stay
+ * identical whether the linker runs on the host, Lilith, or FPGA. */
+writemap()
+{
+ int fd,i,j,m,v;
+ char *s;
+ if (strcmp(mapfile,outfile)==0) die("Map and output paths coincide");
+ i=0; while (i<nfiles) {
+  if (strcmp(mapfile,paths+i*32)==0) die("Map overwrites input");
+  i++;
+ }
+ tmpname(maptmp,mapfile,'M'); cleanup(maptmp);
+ fd=ioopen(maptmp,"w+"); i=0;
+ while (i<nmods) {
+  if (selected[i]&3) {
+   j=0; while (j<8 & members[i*8+j]!=' ') {
+    namebuf[j]=members[i*8+j]; j++;
+   }
+   namebuf[j]=0;
+   maptext(fd,"M "); maptext(fd,namebuf); wb(fd,' ');
+   mapnum(fd,cb[i]); wb(fd,' '); mapnum(fd,mc[i]); wb(fd,' ');
+   mapnum(fd,add16(textlen,db[i])); wb(fd,' ');
+   mapnum(fd,md[i]); wb(fd,10);
+  }
+  i++;
+ }
+ i=0;
+ while (i<nglobal) {
+  s=gs(i); m=be16(s+18);
+  if (selected[m]) {
+   v=be16(s+16);
+   if ((s[20]&1)==0) {
+    if (s[20]&2) v=add16(add16(textlen,db[m]),v-mc[m]);
+    else v=add16(cb[m],v);
+   }
+   maptext(fd,"S "); maptext(fd,s); wb(fd,' ');
+   mapnum(fd,v); wb(fd,10);
+  }
+  i++;
+ }
+ ioclose(fd);
+}
+
+/* A streamed child keeps its own standard PGM header and relocations. */
+bundlepgm()
+{
+ int i,f,out,hi,lo,n,offset,code,rel,previous,at;
+ if (nfiles<2 | *outfile==0) die("unild -b -o output pgms");
+ if (cmdmode | pageflag | *mapfile) die("Bundle options conflict");
+ tmpname(finaltmp,outfile,'L'); cleanup(finaltmp);
+ out=ioopen(finaltmp,"w+"); i=0;
+ while (i<nfiles) {
+  f=ioopen(paths+i*32,"r"); getsize(f); hi=poshi; lo=poslo;
+  rdblk(f,header,16);
+  if (be16(header)!=42330) die("Bundle input is not PGM");
+  rel=be16(header+2); offset=be16(header+4);
+  code=be16(header+6);
+  if (rel<0 | ult(rel,32760)==0) die("PGM relocation overflow");
+  if (offset!=add16(16,rel*2)) die("Invalid PGM code offset");
+  if (ult(be16(header+8),code)==0) die("Invalid PGM entry");
+  add16(code,be16(header+10)); posadd(0,offset,code);
+  if (hi!=poshi | lo!=poslo) die("Invalid PGM extent");
+  n=0; previous=0;
+  while (n<rel) {
+   at=rw(f);
+   if (ult(at,code-1)==0 | (n!=0 & ult(at,previous)))
+    die("Invalid PGM relocation");
+   previous=at; n++;
+  }
+  seekabs(f,0,0);
+  while (hi) {
+   copyblk(f,out,32768);
+   if (ult(lo,32768)) hi--;
+   lo=lo-32768;
+  }
+  copyblk(f,out,lo); ioclose(f); i++;
+ }
+ ioclose(out); publish(finaltmp,outfile);
+ puts(outfile); puts(" PGM container");
+}
+
+maptext(fd,s)
+int fd;
+char *s;
+{
+ while (*s) wb(fd,*s++);
+}
+mapnum(fd,v)
+int fd,v;
+{
+ char b[6];
+ int n,d;
+ n=0;
+ while (1) {
+  d=v&1; v=(v>>1)&32767;
+  b[n++]='0'+(v%5)*2+d; v=v/5;
+  if (v==0) break;
+ }
+ while (n) wb(fd,b[--n]);
 }

@@ -47,6 +47,22 @@ with tempfile.TemporaryDirectory(prefix='unild-') as tmp:
     assert len(code)==27 and bss==16 and entry==0 and len(rels)==3
     run('uniar','r','TEST.LIB','HELP.OBJ')
     assert (work/'TEST.LIB').read_bytes() == (work/'ORIG.LIB').read_bytes()
+    run('unild','-b','-o','BUNDLE.PGM','APP.PGM','APP.PGM')
+    assert (work/'BUNDLE.PGM').read_bytes()==(work/'APP.PGM').read_bytes()*2
+    saved_bundle=(work/'BUNDLE.PGM').read_bytes()
+    run('unild','-b','-o','BUNDLE.PGM','APP.PGM','MAIN.OBJ',ok=False)
+    assert (work/'BUNDLE.PGM').read_bytes()==saved_bundle
+    run('unild','-m','APP.MAP','-o','MAP.PGM','MAIN.OBJ','HELP.OBJ')
+    assert (work/'MAP.PGM').read_bytes()==(work/'APP.PGM').read_bytes()
+    assert 'M MAIN 0 ' in (work/'APP.MAP').read_text()
+    assert 'S BUF 27' in (work/'APP.MAP').read_text()
+    assemble('BROOT', '    extern buffer\nstart ldx #buffer\n    int $38\n    end start\n', objects=True)
+    assemble('BONLY', '    public buffer\n    public boundary\n    section\nbuffer ds 7\nboundary\n    ends\n    end\n', objects=True)
+    run('unild','-m','BSS.MAP','-o','BSS.PGM','BROOT.OBJ','BONLY.OBJ')
+    assert pgm(work/'BSS.PGM')[1] == 7
+    bssmap = (work/'BSS.MAP').read_text()
+    assert 'M BONLY 0 0 5 7' in bssmap
+    assert 'S BUFFER 5' in bssmap and 'S BOUNDARY 12' in bssmap
     for lib in ('ORIG.LIB','TEST.LIB'):
         run('unild','-o','LIB.PGM','MAIN.OBJ',lib)
         assert (work/'LIB.PGM').read_bytes()==(work/'APP.PGM').read_bytes()
@@ -112,6 +128,15 @@ more ds 3
     run('unild','-o','MAINPT.PGM','MAINPT.OBJ')
     assert pgm(work/'MAINPT.PGM')[2]==1
     run('unild','/c','-o','MAINPT.CMD','MAINPT.OBJ',ok=False)
+    labels=''.join('t%04d db 0\n'%i for i in range(1250))
+    assemble('POOLS','start dw t0000,t1249\n'+labels+'    section\ntail ds 16\n    end start\n',True)
+    run('unild','-o','POOLS.PGM','POOLS.OBJ')
+    data,bss,entry,rels=pgm(work/'POOLS.PGM')
+    assert word(data,0)==4 and word(data,2)==1253 and len(data)==1254
+    assert (bss,entry,rels)==(0,0,[0,2])
+    assemble('SCOPES','start jsr target\ntarget rts\n'+labels+'late proc\ntarget db $44\n    endp\n    end start\n',True)
+    run('unild','-o','SCOPES.PGM','SCOPES.OBJ')
+    assert pgm(work/'SCOPES.PGM')[0][:4]==bytes.fromhex('bd000339')
     assemble('GLOB', '''    public exposed
 start jsr exposed
     int $38

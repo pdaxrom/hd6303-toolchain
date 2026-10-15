@@ -107,10 +107,10 @@ rebasebss()
 {
  char *p;
  p=start;
- while (p<freeptr) {
+ while (p!=freeptr) {
   if ((p[NAME]&SYMBLNK)==0 & (p[NAME]&SYMBBSS))
    mputw(p+VALUE,mgetw(p+VALUE)+codesize);
-  p=p+strlen(p+NAME+1)+6;
+  p=nextsym(p);
  }
 }
 beginout(src)
@@ -183,7 +183,7 @@ int kind;
  char *p,*q;
  int val,flags;
  p=start;
- while (p<freeptr) {
+ while (p!=freeptr) {
   if (p[NAME]&kind) {
    q=p;
    if (p[NAME]&SYMBLNK) q=mgetw(p+VALUE);
@@ -196,7 +196,7 @@ int kind;
    }
    outword(val); outword(flags);
   }
-  p=p+strlen(p+NAME+1)+6;
+  p=nextsym(p);
  }
 }
 finishout()

@@ -2405,6 +2405,14 @@ VM_THUNKS
 VM_THUNKS_END
     .endif
 
+    .ifdef PYLDIN601
+    ; This interpreter runs in writable RAMMAN. Advertise a scratch arena
+    ; without reserving another bank or touching conventional RAM.
+    ERROR /($CC00-*)&128
+    DS $CC00-*,$FF
+VM_WORKSPACE
+    DW $5657,1,$CC10,$12F0
+    .endif
 	CHECKSUM
 	DS	$E000-*,$FF
 ; 

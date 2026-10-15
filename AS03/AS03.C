@@ -37,7 +37,7 @@
  */
 #define LINESIZE  128
 #define HASHSIZE  257
-#define SYMSIZE 16200
+#define SYMSIZE 13000
 #define PROCSIZE   16
 #define IFDEFSIZE  16
 #define INCFISIZE  16
@@ -82,6 +82,8 @@ char prepool[192];
 int pretbl[32];
 int precnt, preused;
 int opnames[192], opvals[192], opcount;
+char *symmore,*symend2,*symsplit;
+int symcap,symused;
 char symtab[SYMSIZE];			/* symbol table */
 char *ofile;				/* output file */
 char *endsym;				/* end of symbol table */
@@ -173,6 +175,17 @@ int *argv[];
 	if (argc < 2)
 		usage();
 
+        symmore=symextra; symend2=symmore+3200;
+        symcap=SYMSIZE+3200;
+        if (symmore==0) {
+          symcap=SYMSIZE;
+          tag=52224;
+          if (mgetw(tag)==22103 & mgetw(tag+2)==1) {
+            symmore=mgetw(tag+4);
+            symend2=symmore+mgetw(tag+6);
+            symcap=symcap+mgetw(tag+6);
+          }
+        }
 	endsym = symtab + SYMSIZE;
 	inithash();
 	prehash();
@@ -290,7 +303,7 @@ int *argv[];
 
 	printf("\n%d Lines assembled\n", linestot);
 	printf("%d Bytes code\n", filepos);
-	printf("%d Bytes free of symbol table\n", SYMSIZE - (freeptr - symtab));
+	printf("%d Bytes free of symbol table\n", symcap-symused);
 
 	if ((chksumon != 0) & (errcnt == 0)) {
 		fpos[0] = 0;
@@ -544,7 +557,7 @@ qlabel()
 		ip--;
 	else if (nproc) {
 		if (pass == 1) {
-			if ((tag = hashfind(sbuf)) < procsym[nproc])
+			if (symorder(tag = hashfind(sbuf)) < procsym[nproc])
 				tag = 0;
 		}
 		locsuffix(sbuf, nloc[nproc]);
@@ -613,7 +626,7 @@ getlab()
 {
 	char *tag;
 
-	if ((tag = hashfind(sbuf)) >= start) {
+	if (issym(tag = hashfind(sbuf))) {
 		if (match('=')) {
 			updatesym(tag);
 			return(TRUE);
@@ -1056,7 +1069,7 @@ proc()
 	else {
 		nproc++;
 		nloc[nproc] = loc;
-		procsym[nproc] = freeptr;
+		procsym[nproc] = symused;
 	}
 }
 
@@ -1167,7 +1180,7 @@ dundef()
 	char *tag;
 	if (pass == 1) {
 		if (sym(sbuf)) {
-			if ((tag = hashfind(sbuf)) >= start) {
+			if (issym(tag = hashfind(sbuf))) {
 				if (*(tag + NAME) & SYMBDEF) {
 					mputw(tag + VALUE, 0);
 					return 0;
@@ -1466,7 +1479,7 @@ char *name;
 			    return 0;
 			printf("[%s] ", name);
 			error("symbol undefined");
-		} else if (tag < start)
+		} else if (issym(tag)==0)
 			error("illegal symbol");
 	}
         if (tag) {
@@ -1878,8 +1891,13 @@ int val;
  len=strlen(name)+6;
  if (k>=0) len=len-stem+1;
  if (freeptr+len>endsym) {
-  printf("symbol table full\n");
-  fatal(-1);
+  if (symsplit==0 & symmore!=0) {
+   symsplit=freeptr; symused=symused+endsym-freeptr;
+   freeptr=symmore; endsym=symend2;
+  }
+  if (freeptr+len>endsym) {
+   printf("symbol table full\n"); fatal(-1);
+  }
  }
  h=hash(name); p=freeptr;
  mputw(p+NEXTPTR,hashtab[h]); hashtab[h]=p;
@@ -1887,7 +1905,7 @@ int val;
  if (k>=0) {
   p[NAME+1]=k+1; strcpy(p+NAME+2,name+stem);
  } else strcpy(p+NAME+1,name);
- freeptr=p+len; return p;
+ freeptr=p+len; symused=symused+len; return p;
 }
 
 /*
@@ -1939,14 +1957,14 @@ dumpsym()
 {
  char *p,*q;
  p=start;
- while (p<freeptr) {
+ while (p!=freeptr) {
   tagname(p);
   if (*sbuf!=':') {
    q=p;
    if (p[NAME]&SYMBLNK) q=mgetw(p+VALUE);
    fprintf(outlst,"%s =$%04x\n",sbuf,mgetw(q+VALUE));
   }
-  p=p+strlen(p+NAME+1)+6;
+  p=nextsym(p);
  }
 }
 
@@ -2150,3 +2168,34 @@ char *name;
  }
  return 0;
 }
+
+/* The second pool may be below the first (host) or in the VM bank. */
+issym(p)
+char *p;
+{
+ if (p>=start & p<symtab+SYMSIZE) return 1;
+ return symsplit!=0 & p>=symmore & p<freeptr;
+}
+nextsym(p)
+char *p;
+{
+ p=p+strlen(p+NAME+1)+6;
+ if (p==symsplit) p=symmore;
+ return p;
+}
+symorder(p)
+char *p;
+{
+ if (p==0) return -1;
+ if (symsplit!=0 & p>=symmore & p<symend2)
+  return SYMSIZE+p-symmore;
+ return p-symtab;
+}
+
+#asm
+    .ifdef PYLDIN601
+symextra EQU 0
+    .else
+symextra DS 3200
+    .endif
+#endasm
