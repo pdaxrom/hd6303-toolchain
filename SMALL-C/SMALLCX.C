@@ -62,6 +62,8 @@
 
 #define STATIK  1
 #define STKLOC  2
+#define EXTERNAL 3
+#define INTERNAL 4
 
 /*      Define the "while" statement queue      */
 
@@ -153,6 +155,9 @@ char   *currfn,         /* ptr to symtab entry for current fn. */
 char    quote[2];       /* literal string for '"' */
 char    *cptr;          /* work ptr to any char buffer */
 int     *iptr;          /* work ptr to any int buffer */
+int modmode,declmode,fntype,hadfunc;
+char *outname;
+char modtmp[32];
 /*      >>>>> start cc1 <<<<<<          */
 
 /*                                      */
@@ -203,6 +208,7 @@ int *argv[];
 	output = 0;
 
 	ctext = 0;
+        modmode=0; outname="out.asm";
 
 	glbflag=1;      /* define globals */
 	mainflg=1;      /* first file to assembler */
@@ -216,17 +222,16 @@ int *argv[];
 	--argc;
 	argv++;
 	while (argc > 0) {
-	    if (streq(argv[0], "-ctext"))
+	    if (streq(argv[0], "-c"))
+                modmode=1;
+            else if (streq(argv[0], "-ctext"))
 		ctext = 1;
 	    else if (streq(argv[0], "-errstop"))
 		errstop = 1;
 	    else if (streq(argv[0], "-o")) {
 		if (argc < 2)
 		    usage();
-		if((output = fopen(argv[1], "w")) == NULL) {
-		    error("Can't open output file!");
-		    exit(-1);
-		}
+                outname=argv[1];
 		--argc;
 		argv++;
 	    } else break;
@@ -237,17 +242,16 @@ int *argv[];
 	if (argc == 0)
 	    usage();
 
-	if (output == 0) {
-		if((output = fopen("out.asm", "w")) == NULL) {
-		    error("Can't open output file!");
-		    exit(-1);
-		}
-	}
-
-        if((input=fopen(argv[0], "r")) == NULL) {
-	    error("Can't open input file!");
-	    exit(-1);
-	}
+        if (strcmp(outname,argv[0])==0) {
+         error("output overwrites input"); exit(1);
+        }
+        if ((input=fopen(argv[0],"r"))==0) {
+         error("Can't open input file!"); exit(1);
+        }
+        if (modmode) mktmp();
+        if (modmode) output=fopen(modtmp,"w");
+        else output=fopen(outname,"w");
+        if (output==0) { error("Can't open output file!"); exit(1); }
 
         newfile();
 
@@ -264,13 +268,18 @@ int *argv[];
         dumpglbs();             /* and all static memory */
         trailer();              /* follow-up code */
         closeout();             /* close the output (if any) */
+        if (modmode) modcheck();
         errorsummary();         /* summarize errors (on console!) */
-        return 0;                 /* then exit to system */
+        if (modmode) {
+         if (errcnt==0) modwrite(); else unlink(modtmp);
+        }
+        exit(errcnt!=0);
+        return 0;
 }
 
 usage()
 {
-	pl("unicc [-ctext] [-errstop] [-o outputfile] inputfile");
+	pl("unicc [-c] [-ctext] [-errstop] [-o outputfile] inputfile");
 	nl();
 	exit(-1);
 }
@@ -297,18 +306,21 @@ abort()
 /*      defines, includes, and function */
 /*      definitions are legal...        */
 parse()
-        {
-        while (eof_==0)          /* do until no more input */
-                {
-                if(amatch("char",4)){declglb(CCHAR);ns();}
-                else if(amatch("int",3)){declglb(CINT);ns();}
-                else if(match("#asm"))doasm();
-                else if(match("#include"))doinclude();
-                else if(match("#define"))addmac();
-                else newfunc();
-                blanks();       /* force eof if pending */
-                }
-        }
+{
+ while (eof_==0) {
+  declmode=STATIK; fntype=CINT; hadfunc=0;
+  if (amatch("extern",6)) declmode=EXTERNAL;
+  else if (amatch("static",6)) declmode=INTERNAL;
+  if (amatch("char",4)) { declglb(CCHAR); if (hadfunc==0) ns(); }
+  else if (amatch("int",3)) { declglb(CINT); if (hadfunc==0) ns(); }
+  else if (match("#asm")) doasm();
+  else if (match("#include")) doinclude();
+  else if (match("#define")) addmac();
+  else newfunc();
+  blanks();
+ }
+}
+
 /*                                      */
 /*      Dump the literal pool           */
 /*                                      */
@@ -334,28 +346,23 @@ dumplits()
 /*      Dump all static variables       */
 /*                                      */
 dumpglbs()
-        {
-        int j;
-        if(glbflag==0)return;   /* don't if user said no */
-        cptr=STARTGLB;
-        while(cptr<glbptr)
-                {if(cptr[IDENT]!=FUNCTION)
-                        /* do if anything but function */
-                        {outstr(cptr);col();
-                                /* output name as label... */
-                        defstorage();   /* define storage */
-                        j=(((cptr[OFFSET]&255)<<8)+
-                                (cptr[OFFSET+1]&255));
-                                        /* calc # bytes */
-                        if((cptr[TYPE]==CINT)|
-                                (cptr[IDENT]==POINTER))
-                                j=j+j;
-                        outdec(j);      /* need that many */
-                        nl();
-                        }
-                cptr=cptr+SYMSIZ;
-                }
-        }
+{
+ int j;
+ if (glbflag==0) return;
+ if (modmode) ol("SECTION");
+ cptr=STARTGLB;
+ while (cptr<glbptr) {
+  if (cptr[IDENT]!=FUNCTION & cptr[STORAGE]!=EXTERNAL) {
+   outstr(cptr); col(); defstorage();
+   j=((cptr[OFFSET]&255)<<8)+(cptr[OFFSET+1]&255);
+   if (cptr[TYPE]==CINT | cptr[IDENT]==POINTER) j=j+j;
+   outdec(j); nl();
+  }
+  cptr=cptr+SYMSIZ;
+ }
+ if (modmode) ol("ENDS");
+}
+
 /*                                      */
 /*      Report errors for user          */
 /*                                      */
@@ -445,31 +452,40 @@ closeout()
 /*                                      */
 /* makes an entry in the symbol table so subsequent */
 /*  references can call symbol by name  */
-declglb(typ)            /* typ is CCHAR or CINT */
-        int typ;
-{       int k,j;char sname[NAMESIZE];
-        while(1)
-                {while(1)
-                        {if(endst())return;     /* do line */
-                        k=1;            /* assume 1 element */
-                        if(match("*"))  /* pointer ? */
-                                j=POINTER;      /* yes */
-                                else j=VARIABLE; /* no */
-                         if (symname(sname)==0) /* name ok? */
-                                illname(); /* no... */
-                        if(findglb(sname)) /* already there? */
-                                multidef(sname);
-                        if (match("["))         /* array? */
-                                {k=needsub();   /* get size */
-                                if(k)j=ARRAY;   /* !0=array */
-                                else j=POINTER; /* 0=ptr */
-                                }
-                        addglb(sname,j,typ,k); /* add symbol */
-                        break;
-                        }
-                if (match(",")==0) return; /* more? */
-                }
-        }
+declglb(typ)
+int typ;
+{
+ int k,j,pos; char sname[NAMESIZE],*p;
+ while (1) {
+  if (endst()) return;
+  pos=lptr; k=1; j=VARIABLE;
+  if (match("*")) j=POINTER;
+  if (symname(sname)==0) { illname(); return; }
+  blanks();
+  if (ch()=='(') {
+   lptr=pos; fntype=typ;
+   if (j==POINTER) { error("pointer return unsupported"); return; }
+   newfunc(); hadfunc=1; return;
+  }
+  if (match("[")) {
+   k=needsub(); j=ARRAY;
+   if (k==0 & declmode!=EXTERNAL) j=POINTER;
+  }
+  p=findglb(sname);
+  if (p) {
+   if (p[IDENT]!=j | p[TYPE]!=typ) error("declaration conflict");
+   else if (p[STORAGE]!=EXTERNAL & declmode!=EXTERNAL)
+    multidef(sname);
+   else if (declmode!=EXTERNAL) {
+    p[STORAGE]=declmode; p[OFFSET]=k>>8; p[OFFSET+1]=k&255;
+   }
+  } else {
+   p=addglb(sname,j,typ,k); p[STORAGE]=declmode;
+  }
+  if (match(",")==0) return;
+ }
+}
+
 /*                                      */
 /*      Declare local variables         */
 /*      (i.e. define for use)           */
@@ -542,66 +558,47 @@ needsub()
 /* Called from "parse" this routine tries to make a function */
 /*      out of what follows.    */
 newfunc()
-        {
-        char n[NAMESIZE];       /* ptr => currfn */
-        if (symname(n)==0)
-                {error("illegal function or declaration");
-                kill(); /* invalidate line */
-                return;
-                }
-        fnstart=lineno;         /* remember where fn began */
-        infunc=1;               /* note, in function now. */
-        if(currfn=findglb(n))   /* already in symbol table ? */
-                {if(currfn[IDENT]!=FUNCTION)multidef(n);
-                        /* already variable by that name */
-                else if(currfn[OFFSET]==FUNCTION)multidef(n);
-                        /* already function by that name */
-                else currfn[OFFSET]=FUNCTION;
-                        /* otherwise we have what was earlier*/
-                        /*  assumed to be a function */
-                }
-        /* if not in table, define as a function now */
-        else currfn=addglb(n,FUNCTION,CINT,FUNCTION);
+{
+ char n[NAMESIZE]; int defined;
+ if (symname(n)==0) {
+  error("illegal function or declaration"); kill(); return;
+ }
+ currfn=findglb(n);
+ if (currfn) {
+  if (currfn[IDENT]!=FUNCTION) { multidef(n); kill(); return; }
+ } else currfn=addglb(n,FUNCTION,fntype,0);
+ if (match("(")==0) { error("missing open paren"); kill(); return; }
+ argstk=0; locptr=STARTLOC;
+ while (match(")")==0) {
+  if (symname(n)) argstk=argstk+2;
+  else { error("illegal argument name"); junk(); }
+  blanks();
+  if (streq(line+lptr,")")==0)
+   if (match(",")==0) error("expected comma");
+  if (endst()) break;
+ }
+ if (match(";")) {
+  if (argstk) error("empty prototype required");
+  if (declmode==INTERNAL) currfn[STORAGE]=INTERNAL;
+  argstk=0; locptr=STARTLOC; return;
+ }
+ defined=currfn[OFFSET]|currfn[OFFSET+1];
+ if (defined) multidef(currfn);
+ currfn[OFFSET]=0; currfn[OFFSET+1]=FUNCTION;
+ if (declmode==INTERNAL) currfn[STORAGE]=INTERNAL;
+ else if (currfn[STORAGE]!=INTERNAL) currfn[STORAGE]=STATIK;
+ fnstart=lineno; infunc=1; Zsp=0;
+ toconsole(); nl(); outstr("====== "); outstr(currfn); outstr("()");
+ tofile(); outstr(currfn); col(); nl();
+ while (argstk) {
+  if (amatch("char",4)) { getarg(CCHAR); ns(); }
+  else if (amatch("int",3)) { getarg(CINT); ns(); }
+  else { error("wrong number args"); break; }
+ }
+ if (statement()!=STRETURN) { modstk(0); zret(); }
+ Zsp=0; locptr=STARTLOC; infunc=0;
+}
 
-        toconsole();
-        nl(); outstr("====== "); outstr(currfn+NAME); outstr("()");
-        tofile();
-
-        /* we had better see open paren for args... */
-        if(match("(")==0)error("missing open paren");
-        outstr(n);col();nl();   /* print function name */
-        argstk=0;               /* init arg count */
-        while(match(")")==0)    /* then count args */
-                /* any legal name bumps arg count */
-                {if(symname(n))argstk=argstk+2;
-                else{error("illegal argument name");junk();}
-                blanks();
-                /* if not closing paren, should be comma */
-                if(streq(line+lptr,")")==0)
-                        {if(match(",")==0)
-                        error("expected comma");
-                        }
-                if(endst())break;
-                }
-        locptr=STARTLOC;        /* "clear" local symbol table*/
-        Zsp=0;                  /* preset stack ptr */
-        while(argstk)
-                /* now let user declare what types of things */
-                /*      those arguments were */
-                {if(amatch("char",4)){getarg(CCHAR);ns();}
-                else if(amatch("int",3)){getarg(CINT);ns();}
-                else{error("wrong number args");break;}
-                }
-        if(statement()!=STRETURN) /* do a statement, but if */
-                                /* it's a return, skip */
-                                /* cleaning up the stack */
-                {modstk(0);
-                zret();
-                }
-        Zsp=0;                  /* reset stack ptr again */
-        locptr=STARTLOC;        /* deallocate all locals */
-        infunc=0;               /* not in fn. any more   */
-        }
 /*                                      */
 /*      Declare argument types          */
 /*                                      */
@@ -676,7 +673,10 @@ ns()    {if(match(";")==0)error("missing semicolon");}
 compound()
         {
         ++ncmp;         /* new level open */
-        while (match("}")==0) statement(); /* do one */
+        while (match("}")==0) {
+         if (eof_) return;
+         statement();
+        }
         --ncmp;         /* close current level */
         }
 /*                                      */
@@ -770,7 +770,7 @@ doasm()
                 {inline_();      /* get and print lines */
                 if (match("#endasm")) break;    /* until... */
                 if(eof_)break;
-                outstr(line);
+                asmname(); outstr(line);
                 nl();
                 }
         kill();         /* invalidate line */
@@ -1866,7 +1866,7 @@ header()
         nl();
         comment();
         nl();
-        if(mainflg){            /* do stuff needed for first */
+        if(mainflg & modmode==0){ /* legacy complete program */
                 ol("INCLUDE SYSTEM.H"); /* assembler file */
 
                 zcall("main");  /* call the code generated by small-c */
@@ -1960,7 +1960,7 @@ zret()
 /* Perform subroutine call to value on top of stack */
 callstk()
 {       pseudoins(15);
-        Zsp=Zsp-2;
+        Zsp=Zsp+2;
         }
 /* Jump to specified internal label number */
 jump(label)
@@ -2192,3 +2192,114 @@ astreq(str1,str2,len)
 }
 
 /*     <<<<< End of Small-C compiler >>>>>      */
+
+
+/* Module output is assembled unchanged by native or cross UniAS. */
+mktmp()
+{
+ char *p,*dot; int f;
+ if (strlen(outname)>27) {
+  error("module path >27"); exit(1);
+ }
+ strcpy(modtmp,outname); dot=0; p=modtmp;
+ while (*p) {
+  if (*p=='.') dot=p;
+  if (*p=='/' | *p==92 | *p==':') dot=0;
+  p++;
+ }
+ if (dot==0) dot=p;
+ strcpy(dot,".UCT");
+ if (strcmp(modtmp,outname)==0) {
+  error("reserved .UCT suffix"); exit(1);
+ }
+ f=fopen(modtmp,"r");
+ if (f) { fclose(f); error("temporary exists"); exit(1); }
+}
+libword(s,list)
+char *s,*list;
+{
+ int n,f;
+ while (*list) {
+  n=0;
+  while (list[n]!=0 & list[n]!=' ') n++;
+  if (strlen(s)==n) {
+   f=0; while (f<n & s[f]==list[f]) f++;
+   if (f==n) return 1;
+  }
+  list=list+n;
+  if (*list) list++;
+ }
+ return 0;
+}
+libfunc(s)
+char *s;
+{
+ if (libword(s,"fclose fopen getc getchar gets putc putchar puts")) return 1;
+ if (libword(s,"isalpha isdigit isalnum islower isupper isspace")) return 1;
+ if (libword(s,"toupper tolower strclr strlen")) return 1;
+ if (libword(s,"strcpy strcat strcmp")) return 1;
+ if (libword(s,"exit fgets fputs fread fwrite feof fflush")) return 1;
+ return libword(s,"fseek ftell unlink system geterrno getstrerr");
+}
+modcheck()
+{
+ char *p;
+ p=STARTGLB;
+ while (p<glbptr) {
+  if (p[IDENT]==FUNCTION & p[STORAGE]==INTERNAL)
+   if ((p[OFFSET]|p[OFFSET+1])==0) error("undefined static function");
+  p=p+SYMSIZ;
+ }
+}
+moddecl()
+{
+ char *p; int def;
+ p=STARTGLB;
+ while (p<glbptr) {
+  if (p[IDENT]==FUNCTION) {
+   def=p[OFFSET]|p[OFFSET+1];
+   if (def) {
+    if (p[STORAGE]!=INTERNAL) { ot("PUBLIC "); outstr(p); nl(); }
+   } else if (libfunc(p)==0) {
+    ot("EXTERN "); outstr(p); nl();
+   }
+  } else {
+   if (p[STORAGE]==EXTERNAL) ot("EXTERN ");
+   else if (p[STORAGE]!=INTERNAL) ot("PUBLIC ");
+   if (p[STORAGE]!=INTERNAL) { outstr(p); nl(); }
+  }
+  p=p+SYMSIZ;
+ }
+}
+modwrite()
+{
+ int f,c;
+ output=fopen(outname,"w");
+ if (output==0) { error("module open failed"); return; }
+ ol("INCLUDE CVMDEF.INC"); moddecl();
+ f=fopen(modtmp,"r");
+ if (f==0) { error("module read failed"); closeout(); return; }
+ while ((c=getc(f))!=-1) {
+  if (putc(c,output)==-1) { error("module write failed"); break; }
+ }
+ fclose(f); closeout(); unlink(modtmp);
+}
+asmname()
+{
+ int pos,k; char n[NAMESIZE],*p;
+ if (modmode==0 | line[0]==0 | line[0]==' ' | line[0]==9) return;
+ pos=lptr; lptr=0; k=0;
+ if (alpha(ch())) {
+  while (an(ch())) {
+   if (k<NAMEMAX) n[k]=ch();
+   k++; gch();
+  }
+  if (k<=NAMEMAX) {
+   n[k]=0; p=findglb(n);
+   if (p) if (p[IDENT]==FUNCTION) {
+    p[OFFSET]=0; p[OFFSET+1]=FUNCTION;
+   }
+  }
+ }
+ lptr=pos;
+}

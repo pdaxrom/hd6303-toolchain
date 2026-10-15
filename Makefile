@@ -2,14 +2,14 @@ VM = ./scvm
 
 .DELETE_ON_ERROR:
 
-all: unicc unias unild uniar UNICC.CMD UNIAS.CMD UNILD.CMD UNIAR.CMD
+all: unicc unias unild uniar UNICC.CMD UNIAS.CMD UNILD.CMD UNIAR.CMD runtime
 
 CFLAGS = -O2
 
 scvm: scvm.o
 	$(CC) -o $@ $^
 
-SMALLCX.CMD: scvm SMALL-C/SMALLCX.C
+SMALLCX.CMD: scvm SMALL-C/SMALLCX.C BOOTSTRAP/SMALLC.CMD BOOTSTRAP/AS03.CMD
 	$(VM) BOOTSTRAP/SMALLC.CMD -o SMALLCX.ASM SMALL-C/SMALLCX.C
 	$(VM) BOOTSTRAP/AS03.CMD -o SMALLCX.CMD SMALLCX.ASM
 
@@ -56,11 +56,12 @@ clean:
 	rm -f unias unias.h unild unild.h uniar uniar.h
 	rm -f UNILD.ASM UNILD.CMD UNIAR.ASM UNIAR.CMD
 	rm -f UNICC.ASM UNIAS.CMD UNICC.CMD UNIAS.CMD ZCODE.ROM ZCODE.LST
+	rm -f CSTART.OBJ CEND.OBJ CVCALL.OBJ CRT.LIB pyldin/*.OBJ pyldin/*.LIB pyldin/*.INC
 	rm -f test-scvm pyldin/*.ROM pyldin/*.LST pyldin/*.CMD pyldin/*.ASM pyldin/SYSTEM.H
 
 # FPGA target: a common Small-C ABI, selected at load time by RAMLOAD /CVM.
 .PHONY: pyldin
-pyldin: unias unicc pyldin/ZVM6303.ROM pyldin/ZVM6800.ROM pyldin/UNIAS.CMD pyldin/UNICC.CMD pyldin/UNILD.CMD pyldin/UNIAR.CMD pyldin/SYSTEM.H
+pyldin: unias unicc pyldin/ZVM6303.ROM pyldin/ZVM6800.ROM pyldin/UNIAS.CMD pyldin/UNICC.CMD pyldin/UNILD.CMD pyldin/UNIAR.CMD pyldin/SYSTEM.H pyldin/CSTART.OBJ pyldin/CRT.LIB pyldin/CVMDEF.INC pyldin/CVMABI.INC
 
 
 pyldin/ZVM6303.ROM: ZCODE.ASM unias
@@ -89,10 +90,11 @@ pyldin/SYSTEM.H: SYSTEM.H
 
 .PHONY: test
 
-test: scvm unias unild uniar
+test: scvm unicc unias unild uniar runtime
 	$(CC) -O1 -g -fsanitize=address,undefined tests/test_scvm.c -o test-scvm
 	./test-scvm
 	python3 tests/test_objects.py
+	python3 tests/test_cmodules.py
 
 # Linker and librarian are compiled with the same Small-C VM as UniAS.
 UNILD.ASM: UNILD.C TOOLIO.C unicc
@@ -117,3 +119,29 @@ pyldin/UNILD.CMD: UNILD.ASM SYSTEM.H unias
 pyldin/UNIAR.CMD: UNIAR.ASM SYSTEM.H unias
 	mkdir -p pyldin
 	./unias -D PYLDIN601 -o $@ UNIAR.ASM
+
+# Bytecode modules and native bridge use standard UniCROSS objects/UniLIB.
+.PHONY: runtime
+runtime: CSTART.OBJ CRT.LIB
+CSTART.OBJ: CSTART.ASM CVMDEF.INC unias
+	./unias -c -o $@ CSTART.ASM
+CEND.OBJ: CEND.ASM unias
+	./unias -c -o $@ CEND.ASM
+CVCALL.OBJ: CVCALL.ASM CVMABI.INC unias
+	./unias -c -o $@ CVCALL.ASM
+CRT.LIB: CEND.OBJ CVCALL.OBJ uniar
+	./uniar r $@ CEND.OBJ CVCALL.OBJ
+pyldin/CVMDEF.INC: CVMDEF.INC
+	mkdir -p pyldin
+	cp $< $@
+pyldin/CVMABI.INC: CVMABI.INC
+	mkdir -p pyldin
+	cp $< $@
+pyldin/CSTART.OBJ: CSTART.ASM CVMDEF.INC unias
+	mkdir -p pyldin
+	./unias -D PYLDIN601 -c -o $@ CSTART.ASM
+pyldin/CVCALL.OBJ: CVCALL.ASM CVMABI.INC unias
+	mkdir -p pyldin
+	./unias -D PYLDIN601 -c -o $@ CVCALL.ASM
+pyldin/CRT.LIB: CEND.OBJ pyldin/CVCALL.OBJ uniar
+	./uniar r $@ CEND.OBJ pyldin/CVCALL.OBJ

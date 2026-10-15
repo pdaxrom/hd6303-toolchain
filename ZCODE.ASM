@@ -87,8 +87,26 @@ VM_SERVICE
     RTS
 VM_SERVICE_RUN
     CMPA #1
+    BEQ VM_SERVICE_ENTER
+    CMPA #2
     BNE VM_SERVICE_BAD
+    ; A2 descriptors must fit entirely in ordinary application RAM.
+    ; MC6800 CPX preserves C. Compare bytes for unsigned pointer bounds.
+    LDAA $07
+    CMPA #1
+    BCS VM_SERVICE_PTR
+    CMPA #$BD
+    BHI VM_SERVICE_PTR
+    BCS VM_SERVICE_ENTER
+    LDAA $08
+    CMPA #$F7
+    BCC VM_SERVICE_PTR
+VM_SERVICE_ENTER
     JMP VM_ENTRY
+VM_SERVICE_PTR
+    LDAA #3
+    STAA $06
+    RTS
 VM_SERVICE_BAD
     LDAA #1
     STAA $06
@@ -2236,6 +2254,8 @@ VM_SAVE_DP
     BNE VM_SAVE_DP
     LDX $07
     STX PC
+    LDAA $06
+    STAA VM_SPARE
     CLR VM_ABORT
     CLR VM_STATUS
     CLR R1A
@@ -2319,6 +2339,11 @@ VM_SAVE_CODE
     STX FCHARIO
     LDX #1
     STX FCHARIO+2
+    LDAA VM_SPARE
+    CMPA #2
+    BNE VM_PROGRAM
+    JMP VM_FUNCTION
+VM_PROGRAM
     LDX CURR_PCB
     LDAB ARGC,X
     CLRA
@@ -2385,6 +2410,7 @@ VM_FAILED
     LDAA #$FF
 VM_RESULT
     STAA $06
+    JSR VM_CAPTURE
     LDX #$E0
     LDAB #32
 VM_RESTORE_DP
@@ -2412,6 +2438,86 @@ VM_THUNKS_END
     DS $CC00-*,$FF
 VM_WORKSPACE
     DW $5657,1,$CC10,$12F0
+    ; Keep native call support beyond the assembler's advertised scratch.
+    DS $DF00-*,$FF
+VM_FUNCTION
+    LDX PC
+    STX CODEADR
+    LDAA 2,X
+    BNE VM_FUNC_BAD
+    LDAB 3,X
+    CMPB #64
+    BHI VM_FUNC_BAD
+    BITB #1
+    BNE VM_FUNC_BAD
+    STAB DFLAG
+    LDAA 0,X
+    CMPA #1
+    BCS VM_FUNC_BAD
+    CMPA #$BE
+    BCC VM_FUNC_BAD
+    TST DFLAG
+    BEQ VM_FUNC_ARGS
+    LDX CODEADR
+    LDAA 4,X
+    LDAB 5,X
+    ADDB DFLAG
+    ADCA #0
+    BCS VM_FUNC_BAD
+    CMPA #$BE
+    BHI VM_FUNC_BAD
+    BCS VM_FUNC_RANGE
+    TSTB
+    BNE VM_FUNC_BAD
+VM_FUNC_RANGE
+    LDAA 4,X
+    BEQ VM_FUNC_BAD
+    LDX 4,X
+VM_FUNC_COPY
+    LDAA 0,X
+    LDAB 1,X
+    PSHB
+    PSHA
+    INX
+    INX
+    DEC DFLAG
+    DEC DFLAG
+    BNE VM_FUNC_COPY
+VM_FUNC_ARGS
+    LDX CODEADR
+    LDAA 2,X
+    LDAB 3,X
+    STAA R1A
+    STAB R1B
+    LDAA #(VM_FUNC_STOP&255)
+    PSHA
+    LDAA #/(VM_FUNC_STOP)
+    PSHA
+    LDX 0,X
+    JMP NEXT2
+VM_FUNC_BAD
+    LDAA #3
+    STAA VM_ABORT
+    JMP VM_DONE
+VM_FUNC_STOP
+    DB 86
+    INT $38
+VM_CAPTURE
+    LDAA VM_SPARE
+    CMPA #2
+    BNE VM_CAP_END
+    LDX CODEADR
+    LDAA R1A
+    LDAB R1B
+    STAA 6,X
+    STAB 7,X
+    CLRA
+    LDAB $06
+    STAA 8,X
+    STAB 9,X
+VM_CAP_END
+    RTS
+    ERROR /($DFFF-*)&128
     .endif
 	CHECKSUM
 	DS	$E000-*,$FF

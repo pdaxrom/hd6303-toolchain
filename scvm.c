@@ -293,7 +293,8 @@ int main(int argc, char *argv[])
 {
 #ifndef APP
     FILE *inf;
-    word len;
+    size_t len;
+    static byte input[65536];
 #endif
 
     word sp;
@@ -304,14 +305,66 @@ int main(int argc, char *argv[])
 #ifdef APP
     memcpy(&mem[load], app, sizeof(app));
 #else
-    if (argc < 2) { fprintf(stderr, "Usage: scvm program.cmd [args]\n"); return 2; }
+    if (argc > 3 && !strcmp(argv[1], "-b")) {
+        char *end;
+        unsigned long base = strtoul(argv[2], &end, 0);
+        if (*end || base < 0x100 || base >= 0xbe00) {
+            fprintf(stderr, "Invalid PGM load address\n"); return 2;
+        }
+        load = (word)base; argc -= 2; argv += 2;
+    }
+    if (argc < 2) {
+        fprintf(stderr, "Usage: scvm [-b address] program.cmd/pgm [args]\n");
+        return 2;
+    }
     inf = fopen(argv[1], "rb");
     if (!inf) {
 	fprintf(stderr, "Can't open file %s\n", argv[1]);
 	return 1;
     }
-    len = fread(&mem[load], 1, sizeof(mem) - load, inf);
+    len = fread(input, 1, sizeof(input), inf);
+    int extra = fgetc(inf);
     fclose(inf);
+    if (extra != EOF || len < 9) {
+        fprintf(stderr, "Invalid program extent\n"); return 1;
+    }
+    if (input[0] == 0xa5 && input[1] == 0x5a) {
+        unsigned count = input[2]*256u+input[3];
+        unsigned offset = input[4]*256u+input[5];
+        unsigned code = input[6]*256u+input[7];
+        unsigned entry = input[8]*256u+input[9];
+        unsigned bss = input[10]*256u+input[11];
+        if (len < 16 || offset != 16u+2u*count ||
+            len != (size_t)offset+code || entry+9u > code ||
+            (uint32_t)load+code+bss > 0xbe00) {
+            fprintf(stderr, "Invalid PGM layout\n"); return 1;
+        }
+        memcpy(mem+load, input+offset, code);
+        memset(mem+load+code, 0, bss);
+        unsigned previous = 0;
+        for (unsigned i=0; i<count; i++) {
+            unsigned at=input[16+2*i]*256u+input[17+2*i];
+            if (at+1u >= code || (i && at <= previous)) {
+                fprintf(stderr, "Invalid PGM relocation\n"); return 1;
+            }
+            word value=(word)(GETWORD(load+at)+load);
+            mem[load+at]=(byte)(value>>8); mem[load+at+1]=(byte)value;
+            previous=at;
+        }
+        if (memcmp(mem+load+entry+3, "CVM\1", 4)) {
+            fprintf(stderr, "PGM has no Small-C entry descriptor\n"); return 1;
+        }
+        start=GETWORD(load+entry+7);
+        if (start < load || start >= (uint32_t)load+code) {
+            fprintf(stderr, "Invalid Small-C entry address\n"); return 1;
+        }
+    } else {
+        if (load != 0x100 || len > sizeof(mem)-load) {
+            fprintf(stderr, "CMD requires base 0x100\n"); return 1;
+        }
+        memcpy(mem+load,input,len);
+        if (!memcmp(mem+load+3,"CVM\1",4)) start=GETWORD(load+7);
+    }
 #endif
 
     sp = 0xFF00;

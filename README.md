@@ -50,10 +50,12 @@ Small-C is a subset of the C language and is optimized for use on systems with l
 
 **Usage:**
 ```
-unicc [-ctext] [-errstop] [-o outputfile] inputfile
+unicc [-c] [-ctext] [-errstop] [-o outputfile] inputfile
 ```
 **Where:**
 ```
+-c - emit separate-module ASM for UniAS OBJ output
+
 -ctext - include program lines in assembler listing comments
 
 -errstop - stop compilation on error
@@ -73,12 +75,12 @@ main()
 
 Compile the program:
 ```
-unicc hello.c
+unicc -o HELLO.ASM HELLO.C
 ```
 
 Assemble the resulting assembler file into binary:
 ```
-unias hello.asm
+unias -o HELLO.CMD HELLO.ASM
 ```
 Run the compiled program:
 ```
@@ -124,8 +126,8 @@ the gateway. Native inline assembly still must match the selected CPU.
 Compile in a directory containing the generated SYSTEM.H:
 
 ```
-UNICC HELLO.C
-UNIAS HELLO.ASM
+UNICC -o HELLO.ASM HELLO.C
+UNIAS -o HELLO.CMD HELLO.ASM
 HELLO
 ```
 
@@ -202,6 +204,49 @@ Its PGM outputs with byte-only relocations may contain harmless padding
 between the relocation table and code. Tests compare loaded code, relocation
 entries, entry point and BSS in that case. The separate no-internal-relocation
 library case has identical loaded contents; UniLD correctly links both kinds.
+
+## Separate Small-C modules and mixed calls
+
+`unicc -c -o PART.ASM PART.C` emits module ASM for `unias -c`, with
+PUBLIC/EXTERN declarations and relative BSS. `extern` variables/arrays,
+empty K&R function declarations, typed K&R definitions and file `static`
+are supported. The existing eight-character identifier limit is retained.
+Compiler errors now return a failure status; module source errors preserve
+an existing output ASM. `.UCT` is reserved for the module body temporary.
+
+```
+unicc -c -o MAIN.ASM MAIN.C
+unicc -c -o HELP.ASM HELP.C
+unias -c -o MAIN.OBJ MAIN.ASM
+unias -c -o HELP.OBJ HELP.ASM
+unild -o APP.PGM CSTART.OBJ MAIN.OBJ HELP.OBJ CRT.LIB
+uniar r UTIL.LIB HELP.OBJ
+unild -o APP.PGM CSTART.OBJ MAIN.OBJ UTIL.LIB CRT.LIB
+scvm APP.PGM
+scvm -b 0x8000 APP.PGM
+```
+
+Use runtime objects/headers from `pyldin/` for the FPGA target. CSTART must
+be first and CRT.LIB last: they bound and clear the combined BSS using the
+existing OBJ format. Legacy complete-CMD compilation remains available.
+The compiler still emits ASM; each tool remains a separate native CMD.
+
+Function addresses are ordinary relocated 16-bit VM entry addresses.
+C-visible native wrappers begin with `DB 86` and return using `JMP RTSC`.
+The new FPGA INT EF A=2 / native `cvcall` entry accepts a function/argument
+pointer descriptor and returns a 16-bit result, with no argc/argv setup.
+It preserves the parent VM context for recursive C/native/C callbacks.
+Both CPU ROMs keep the existing query/program-entry ABI and VM scratch
+layout. Old Lilith E8 entry remains supported. The host VM loads linked
+PGMs but still rejects arbitrary machine-code inserts; mixed execution is
+verified on the FPGA project's CPU harness.
+
+[CVMOBJ.TXT](CVMOBJ.TXT) specifies commands, storage/linkage rules, call
+frames, descriptor layout, bounds, errors, host limitations and the test
+plan. `tests/test_cmodules.py` covers linking and execution; the FPGA
+`test-c-modules` compares native ASM/OBJ/LIB/PGM/maps on both models/CPUs.
+It also executes the original ULINK against C objects and a compatible
+library case. Its existing documented defects are not hidden.
 
 ## UniAS memory with resident HG
 

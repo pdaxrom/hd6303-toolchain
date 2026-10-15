@@ -1,0 +1,137 @@
+UniCC object modules and mixed bytecode/native ABI
+
+DESIGN / IMPLEMENTED PLAN
+1. UniCC -c emits module ASM with PUBLIC/EXTERN and relative BSS.
+2. Bytecode calls link across OBJ/LIB, including pointers and recursion.
+3. CSTART.OBJ starts a program once and clears the combined BSS.
+4. C-visible native entries start with DB 86 and return through RTSC.
+5. INT EF A=2 calls a bytecode function from native code, with its own
+   descriptor, arguments, result and saved VM context; no argc/argv.
+6. Keep UniCROSS OBJ v1 and original UniLIB formats. Test original ULINK.
+7. Compare cross/native builds on 601/601A and MC6800/HD6303; test mixed
+   calls, reentry, errors, stack/direct-page/bank and vector restoration.
+8. Publish tools, both ROMs, runtime objects and examples to HG.
+
+BUILDING
+Keep CVMDEF.INC in the current directory when assembling module ASM.
+Keep CVMABI.INC for native wrappers. Sources stay in Small-C/K&R syntax;
+identifiers retain the existing eight-character significance.
+
+  UNICC -c -o MMAIN.ASM MMAIN.C
+  UNICC -c -o MHELP.ASM MHELP.C
+  UNIAS -c -o MMAIN.OBJ MMAIN.ASM
+  UNIAS -c -o MHELP.OBJ MHELP.ASM
+  UNILD -o APP.PGM CSTART.OBJ MMAIN.OBJ MHELP.OBJ CRT.LIB
+
+CSTART.OBJ must be first; CRT.LIB must be last. CSTART owns the first
+BSS byte; CRT.LIB supplies the final BSS marker. This uses normal OBJ
+symbols and relocations, with no host PGM rewriting. Exported addresses
+remain ordinary 16-bit addresses; the PGM loader relocates them.
+Unreferenced library modules and their BSS are omitted.
+
+  UNIAR r UTIL.LIB MHELP.OBJ
+  UNILD -o APP.PGM CSTART.OBJ MMAIN.OBJ UTIL.LIB CRT.LIB
+
+Only one CSTART is linked. The root can instead be a native program that
+calls bytecode through CV_CALL; that program owns data initialization.
+For PGM the DOS loader reserves BSS and CSTART clears it. Do not substitute
+/c without reserving memory for BSS yourself. Existing single-file
+UNICC -> UNIAS -> CMD remains supported and keeps its old startup.
+
+DECLARATIONS
+  extern int shared;
+  extern char buffer[];
+  extern int helper();
+  static int private;
+  static int localfn(n)
+  int n;
+  { return n+1; }
+
+Definitions with external linkage become PUBLIC. Declarations and calls
+without a definition become EXTERN. File static symbols remain private;
+each object can contain the same private names and compiler labels.
+VM library functions use private fixed EQU addresses from CVMDEF.INC.
+They are not relocated, duplicated as executable code, or exported as
+absolute PUBLIC symbols. General C initialization and full ANSI declarators
+remain outside the existing Small-C dialect.
+The -c output is ASM, not OBJ: run UniAS separately. Keeping separate CMD
+steps works under UniDOS, which cannot nest absolute CMD applications.
+Compiler errors return a nonzero status. A failed source compilation does
+not replace an existing module ASM. The temporary suffix .UCT is reserved.
+
+BYTECODE CALLS
+  DB 28
+  DW helper
+is a VM call; only the address word is a relocation. DB 32 returns to its
+caller. Indirect calls use DB 30 and the same VM entry address. Arguments
+are pushed as 16-bit words in source order. The last argument is nearest
+the return address; the caller removes arguments. R1 carries a 16-bit
+result and initially contains the argument byte count on entry.
+The native ROM VM shares the CPU stack with these VM call frames.
+
+BYTECODE -> NATIVE
+  helper DB 86
+         TSX
+         LDAA 2,X
+         LDAB 3,X
+         ; process the last argument, return A:B
+         JMP RTSC
+
+The exported helper address is the DB 86, not the first CPU instruction.
+This also makes ordinary C function pointers work with native helpers.
+A raw CPU entry uses a different name and its own documented CPU ABI.
+The linker resolves addresses, but cannot infer calling conventions from
+standard OBJ symbols. It does not make a raw JSR target VM-callable.
+C function prototypes must precede an inline #asm implementation if its
+name has not already been referenced; separate native OBJ wrappers are
+usually simpler. The module compiler recognizes matching #asm labels.
+
+NATIVE -> BYTECODE (PYLDIN601 EF ABI)
+  JSR cvcall with X pointing to ten bytes, or INT EF with A=2 and X:
+    +0 word function entry (ordinary RAM 0100..BDFF)
+    +2 word argument byte count (even, 0..64)
+    +4 word pointer to words in source order
+    +6 word result, written on return
+    +8 word status, written on return
+All words are big endian. The argument pointer is unused for zero bytes.
+The descriptor and argument bytes must fit in conventional application
+RAM below BE00. An invalid descriptor pointer returns A=3 without writing
+through it. A valid descriptor returns A=0 on normal return, A=FF on
+VM errors/BREAK, or the low byte of exit(n); its status word mirrors A.
+Result is meaningful on normal return. The call prepares no argc/argv.
+
+VM context, temporary handlers and return state are private to each call
+on the ordinary stack. Native wrappers can use stack-local descriptors,
+so C -> native -> C callbacks and recursive reentry are supported.
+Each wrapper must balance its own CPU pushes and preserve VM state when
+using direct-page memory. A VM-native function returns via JMP RTSC;
+a regular CPU function returns RTS. cvcall itself is a CPU entry.
+Original Lilith E8 startup is retained; CV_CALL is the FPGA EF extension.
+Both FPGA ROM variants implement the same descriptor and bytecode ABI.
+Their MC6800 version executes no HD6303 extensions.
+
+HOST TESTING
+  scvm APP.PGM
+  scvm -b 0x8000 APP.PGM
+The host loader validates PGM layout and relocation records, reserves BSS,
+and reads the CSTART versioned entry marker. Old CMD still starts normally.
+The host interpreter runs bytecode and its built-in library; arbitrary
+machine-code inserts require the pyldin601-fpga CPU test harness or board.
+
+TESTS
+  make all pyldin test                       (hd6303-toolchain)
+  make test-c-modules CVM_TOOLCHAIN=...       (pyldin601-fpga)
+  make test-cvm CVM_TOOLCHAIN=...             (pyldin601-fpga)
+The module suite runs pure C, C/native callbacks, native C entry, and
+original ULINK with plain C objects and a library without internal relocs.
+Original ULINK's known library-relocation and absolute-PUBLIC defects
+remain documented in README; UniLD handles those standard formats.
+
+HG
+Use HANDLES 16 before loading the VM. After replacing both ROMs:
+  RAMLOAD /U ZCODEVM
+  RAMLOAD /CVM
+Alternatively reset, load HG, expand handles, then load the VM.
+CVM\COBJ contains tested sources, response lists, objects and programs.
+BUILD.TXT there lists the exact native steps. Runtime headers and both
+VM ROMs are also installed beside the tools in CVM.
