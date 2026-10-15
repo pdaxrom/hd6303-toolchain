@@ -78,7 +78,7 @@
 
 /*      Define the literal pool                 */
 
-#define LITABSZ 2000
+#define LITABSZ 4096
 #define LITMAX  LITABSZ-1
 
 /*      Define the input line                   */
@@ -1227,6 +1227,7 @@ outdec(numb)
  {
         int k,zs;
         char c;
+        if (numb == -32768) { outstr("-32768"); return; }
         zs = 0;
         k=10000;
         if (numb<0)

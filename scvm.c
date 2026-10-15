@@ -4,9 +4,23 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include <stdint.h>
 
-#define byte unsigned char
-#define word unsigned short
+typedef uint8_t byte;
+typedef uint16_t word;
+
+/* VM arithmetic is explicitly 16-bit on every host. */
+static int32_t signed16(word v) { return v < 0x8000 ? v : (int32_t)v - 65536; }
+static word asr16(word v, unsigned n) {
+    n &= 31;
+    if (n >= 16) return (v & 0x8000) ? 0xffff : 0;
+    return (v & 0x8000) ? (word)~((word)~v >> n) : (word)(v >> n);
+}
+static word div16(word a, word b, int remainder) {
+    if (!b) { fprintf(stderr, "VM: division by zero\n"); exit(1); }
+    int32_t x = signed16(a), y = signed16(b);
+    return (word)(remainder ? x % y : x / y);
+}
 
 #define LD1IM		2*0
 #define LD1SOFF		2*1
@@ -106,9 +120,9 @@ byte app[] = {
 };
 #endif
 
-#define GETBYTE(a) (mem[a])
+#define GETBYTE(a) (mem[(word)(a)])
 #define GETWORD(a) ((GETBYTE(a) << 8) | GETBYTE((a) + 1))
-#define GETDWORD(a) ((GETWORD(a) << 16) | GETWORD((a) + 2))
+#define GETDWORD(a) (((uint32_t)GETWORD(a) << 16) | GETWORD((a) + 2))
 
 #define GETARG1() GETWORD(*sp + 3)
 #define GETARG2() GETWORD(*sp + 5)
@@ -136,7 +150,7 @@ void chkfunc(word *sp, word *pc, word *reg)
 		FILE *f = fopen((char *)&mem[tmp], (char *)&mem[tmp1]);
 		if (f) {
 		    *reg = fileno(f);
-		    if (*reg > sizeof(fdtab) / sizeof(FILE *)) {
+		    if (*reg >= sizeof(fdtab) / sizeof(FILE *)) {
 			fprintf(stderr, "fd > fdtab, error!\n");
 			exit(-1);
 		    }
@@ -147,23 +161,27 @@ void chkfunc(word *sp, word *pc, word *reg)
 		break;
 	case f_getc: tmp = GETARG1(); *reg = fgetc(fdtab[tmp]); break;
 	case f_getchar: *reg = getchar(); break;
-	case f_gets: tmp = GETARG1(); *reg = gets(&mem[tmp]) ? tmp : 0; break;
+	case f_gets:
+        tmp = GETARG1();
+        *reg = fgets((char *)&mem[tmp], 65536u-tmp, stdin) ? tmp : 0;
+        if (*reg) { size_t n = strlen((char *)&mem[tmp]); if (n && mem[tmp+n-1] == '\n') mem[tmp+n-1] = 0; }
+        break;
 	case f_putc:
 		tmp1 = GETARG1();
 		tmp = GETARG2();
 		*reg = fputc(tmp, fdtab[tmp1]);
 		break;
 	case f_putchar: tmp = GETARG1(); printf("%c", tmp); *reg = tmp; break;
-	case f_puts: tmp = GETARG1(); printf("%s", &mem[tmp]); *reg = 0; break;
+	case f_puts: tmp = GETARG1(); puts((char *)&mem[tmp]); *reg = 1; break;
 
-	case f_isalpha: tmp = GETARG1(); *reg = isalpha(tmp); break;
-	case f_isdigit: tmp = GETARG1(); *reg = isdigit(tmp); break;
-	case f_isalnum: tmp = GETARG1(); *reg = isalnum(tmp); break;
-	case f_islower: tmp = GETARG1(); *reg = islower(tmp); break;
-	case f_isupper: tmp = GETARG1(); *reg = isupper(tmp); break;
-	case f_isspace: tmp = GETARG1(); *reg = isspace(tmp); break;
-	case f_toupper: tmp = GETARG1(); *reg = toupper(tmp); break;
-	case f_tolower: tmp = GETARG1(); *reg = tolower(tmp); break;
+	case f_isalpha: tmp = GETARG1() & 127; *reg = ((tmp>='a'&&tmp<='z')||(tmp>='A'&&tmp<='Z')||tmp=='_'); break;
+	case f_isdigit: tmp = GETARG1() & 127; *reg = (tmp>='0'&&tmp<='9'); break;
+	case f_isalnum: tmp = GETARG1() & 127; *reg = ((tmp>='a'&&tmp<='z')||(tmp>='A'&&tmp<='Z')||tmp=='_'||(tmp>='0'&&tmp<='9')); break;
+	case f_islower: tmp = GETARG1() & 127; *reg = (tmp>='a'&&tmp<='z'); break;
+	case f_isupper: tmp = GETARG1() & 127; *reg = (tmp>='A'&&tmp<='Z'); break;
+	case f_isspace: tmp = GETARG1() & 127; *reg = (tmp==' '||tmp==13||tmp==10||tmp==9); break;
+	case f_toupper: tmp = GETARG1(); *reg = (tmp>='a'&&tmp<='z') ? tmp-32 : tmp; break;
+	case f_tolower: tmp = GETARG1(); *reg = (tmp>='A'&&tmp<='Z') ? tmp+32 : tmp; break;
 	case f_strclr:
 		tmp1 = GETARG1();
 		tmp = GETARG2();
@@ -190,7 +208,7 @@ void chkfunc(word *sp, word *pc, word *reg)
 		*reg = strcmp((char *)&mem[tmp], (char *)&mem[tmp1]);
 		break;
 
-	case f_exit: tmp = GETARG1(); exit((short)tmp); break;
+	case f_exit: tmp = GETARG1(); exit(signed16(tmp)); break;
 
 	case f_fgets:
 		tmp  = GETARG1();
@@ -229,7 +247,7 @@ void chkfunc(word *sp, word *pc, word *reg)
 		tmp  = GETARG1();
 		tmp1 = GETARG2();
 		tmp2 = GETARG3();
-		*reg = fseek(fdtab[tmp2], GETDWORD(tmp1) , tmp);
+		*reg = fseek(fdtab[tmp2], (int32_t)(uint32_t)GETDWORD(tmp1) , tmp);
 		break;
 	case f_ftell:
 		tmp  = GETARG1();
@@ -242,7 +260,19 @@ void chkfunc(word *sp, word *pc, word *reg)
 		*reg = tmp;
 		break;
 	case f_unlink: tmp = GETARG1(); *reg = unlink((char *)&mem[tmp]); break;
-	case f_system: tmp = GETARG1(); *reg = system((char *)&mem[tmp]); break;
+	case f_system: {
+        char from[256], to[256], extra;
+        tmp = GETARG1();
+        const char *command = (char *)&mem[tmp];
+        if (!strncmp(command, "REN ", 4)) {
+            if (sscanf(command + 4, "%255s %255s %c", from, to, &extra) != 2) {
+                errno = EINVAL; *reg = -1;
+            } else if (!access(to, F_OK)) {
+                errno = EEXIST; *reg = -1;
+            } else *reg = rename(from, to);
+        } else *reg = system(command);
+        break;
+    }
 	case f_geterrno: *reg = errno; break;
 	case f_getstrerr:
 		tmp  = GETARG1();
@@ -274,6 +304,7 @@ int main(int argc, char *argv[])
 #ifdef APP
     memcpy(&mem[load], app, sizeof(app));
 #else
+    if (argc < 2) { fprintf(stderr, "Usage: scvm program.cmd [args]\n"); return 2; }
     inf = fopen(argv[1], "rb");
     if (!inf) {
 	fprintf(stderr, "Can't open file %s\n", argv[1]);
@@ -307,6 +338,7 @@ int main(int argc, char *argv[])
 #ifndef APP
     argc--;
 #endif
+    fdtab[0] = stdin; fdtab[1] = stdout; fdtab[2] = stderr;
     sp = 0xFEFF;
     mem[sp--] = argc & 0xFF;
     mem[sp--] = argc >> 8;
@@ -343,30 +375,30 @@ int main(int argc, char *argv[])
 	case DBL1:	reg <<= 1; break;
 	case ADDS:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = tmp + reg; break;
 	case SUBFST:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = tmp - reg; break;
-	case MUL1:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = tmp * reg; break;
-	case DIV1:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = tmp / reg; break;
-	case MOD:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = tmp % reg; break;
+	case MUL1:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = (word)((uint32_t)tmp * reg); break;
+	case DIV1:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = div16(tmp, reg, 0); break;
+	case MOD:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = div16(tmp, reg, 1); break;
 	case ORS:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = tmp | reg; break;
 	case XORS:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = tmp ^ reg; break;
 	case ANDS:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = tmp & reg; break;
-	case ASRS:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = tmp >> reg; break;
-	case ASLS:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = tmp << reg; break;
+	case ASRS:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = asr16(tmp, reg); break;
+	case ASLS:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = (reg & 31) >= 16 ? 0 : (word)((uint32_t)tmp << (reg & 31)); break;
 	case NEGR:	reg = ~reg; reg++; break;
 	case NOTR:	reg = ~reg; break;
 	case INCR:	reg++; break;
 	case DECR:	reg--; break;
 	case ZEQ:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = (tmp == reg) ? 1: 0; break;
 	case ZNE:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = (tmp != reg) ? 1: 0; break;
-	case ZLT:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = (((short)tmp) < ((short)reg)) ? 1: 0; break;
-	case ZLE:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = (((short)tmp) <= ((short)reg)) ? 1: 0; break;
-	case ZGT:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = (((short)tmp) > ((short)reg)) ? 1: 0; break;
-	case ZGE:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = (((short)tmp) >= ((short)reg)) ? 1: 0; break;
+	case ZLT:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = (signed16(tmp) < signed16(reg)) ? 1: 0; break;
+	case ZLE:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = (signed16(tmp) <= signed16(reg)) ? 1: 0; break;
+	case ZGT:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = (signed16(tmp) > signed16(reg)) ? 1: 0; break;
+	case ZGE:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = (signed16(tmp) >= signed16(reg)) ? 1: 0; break;
 	case ULT:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = (tmp < reg) ? 1: 0; break;
 	case ULE:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = (tmp <= reg) ? 1: 0; break;
 	case UGT:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = (tmp > reg) ? 1: 0; break;
 	case UGE:	tmp = (mem[sp + 1] << 8) | mem[sp + 2]; sp += 2; reg = (tmp >= reg) ? 1: 0; break;
-	case ASMC:	if (!((mem[pc] == 0x3f) && mem[pc + 1] == 0x38)) fprintf(stderr, "ASMC is not supported!"); running = 0; break;
-	default:	fprintf(stderr, "Unsupported bytecode %02X at %04X\n", mem[pc - 1], pc - 1); running = 0; break;
+	case ASMC:	if (!((mem[pc] == 0x3f) && mem[pc + 1] == 0x38)) { fprintf(stderr, "ASMC is not supported!\n"); return 1; } running = 0; break;
+	default:	fprintf(stderr, "Unsupported bytecode %02X at %04X\n", mem[pc - 1], pc - 1); return 1;
 	}
     }
 

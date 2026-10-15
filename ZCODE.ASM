@@ -9,7 +9,15 @@
 ;
 
 ; LIB FLEXPTRS
-	SECTION	$E8
+    SECTION $E0
+VM_FRAME DS 2
+VM_ABORT DS 1
+VM_TMPA DS 1
+VM_TMPX DS 2
+VM_STATUS DS 1
+VM_SPARE DS 1
+; Existing ABI workspace stays at E8..FF.
+
 PC	DS	2	; PSEUDO PROGRAM COUNTER
 R1A	DS	1	; WORKING 16 BIT
 R1B	DS	1	; --REGISTER
@@ -40,13 +48,55 @@ ARGV	EQU	$20
 	JMP	INIT
 	JMP	PRINT_VERSION
 
-	DB	$E8
-	DW	EXECUTE
+    .ifdef PYLDIN601
+    DB $EF
+    DW VM_SERVICE
+    .else
+    DB $E8
+    DW EXECUTE
+    .endif
 
 	DB	0
 
-INIT	BSR	PRINT_VERSION
-	RTS
+INIT
+    .ifdef PYLDIN601
+    .ifndef CPU6800
+    LDAA $E6A0
+    BITA #2
+    BNE VM_INIT_OK
+    LDAA #3
+    STAA $06
+    RTS
+VM_INIT_OK
+    .endif
+    CLR $06
+    RTS
+VM_SERVICE
+    TSTA
+    BNE VM_SERVICE_RUN
+    LDAA #1
+    STAA $06
+    .ifdef CPU6800
+    CLR $05
+    .else
+    LDAA #1
+    STAA $05
+    .endif
+    LDX #$5A56
+    STX $07
+    RTS
+VM_SERVICE_RUN
+    CMPA #1
+    BNE VM_SERVICE_BAD
+    JMP VM_ENTRY
+VM_SERVICE_BAD
+    LDAA #1
+    STAA $06
+    RTS
+    .else
+    BSR PRINT_VERSION
+    RTS
+    .endif
 
 PRINT_VERSION LDX	#TITLE
 	INT	$23
@@ -130,7 +180,11 @@ TITLE	DB	10, 'ZCodeVM  Version 1.0 ', 0
 	JMP	getstrerr+1
 	DS	4*4,$FF	;ROOM FOR 4 MORE
 
-EXECUTE	STX	CODEADR
+EXECUTE
+    .ifdef PYLDIN601
+    JMP VM_ENTRY
+    .else
+    STX	CODEADR
 	LDX	#FCHARBUF
 	STX	FCHARIO
 	LDX	#1
@@ -139,14 +193,41 @@ EXECUTE	STX	CODEADR
 	LDX	CURR_PCB
 	LDAB	ARGC,X
 	CLRA
-	XGDX
-	ADDD	#ARGV
-	PSHX
+    .ifdef CPU6800
+    STX VM_TMPX
+    STAA STEMP
+    STAB STEMP+1
+    LDX STEMP
+    LDAA VM_TMPX
+    LDAB VM_TMPX+1
+    .else
+    XGDX
+    .endif
+    .ifdef CPU6800
+    ADDB #(ARGV&255)
+    ADCA #/(ARGV)
+    JSR VM_FIXZ
+    .else
+    ADDD #ARGV
+    .endif
+    .ifdef CPU6800
+    STAA VM_TMPA
+    STX VM_TMPX
+    LDAA VM_TMPX+1
+    PSHA
+    LDAA VM_TMPX
+    PSHA
+    LDAA VM_TMPA
+    .else
+    PSHX
+    .endif
 	PSHB
 	PSHA
 
 	LDX	CODEADR
 	BRA	NEXT2		; START THE INTERPRETATION
+
+    .endif
 
 ;*************************************************************
 ;
@@ -158,14 +239,60 @@ BUMP2A	INX			; INCR BY 2
 	BRA	NEXT1		; FETCH NEXT INSTRUCTION
 
 NEXT	LDX	PC
-NEXT1	STD	R1A		; SAVE THE WORK REGISTER
-NEXT2	LDAB	0,X		; GET THE PSEUDO-INSTRUCTION
+NEXT1
+    .ifdef CPU6800
+    STAA R1A
+    STAB R1A+1
+    TSTA
+    JSR VM_FIXZ
+    .else
+    STD R1A
+    .endif
+NEXT2
+    .ifdef PYLDIN601
+    TST VM_ABORT
+    BEQ VM_FETCH
+    JMP VM_DONE
+VM_FETCH
+    .endif
+    LDAB 0,X
+    .ifdef PYLDIN601
+    CMPB #86
+    BHI VM_INVALID
+    BITB #1
+    BEQ VM_VALID
+VM_INVALID
+    LDAA #3
+    STAA VM_ABORT
+    JMP VM_DONE
+VM_VALID
+    .endif		; GET THE PSEUDO-INSTRUCTION
 	INX			;  (B CONTAINS A TABLE OFFSET)
 	STX	PC		; SAVE NEW PC
 	LDX	#JTABLE
-	ABX
+    .ifdef CPU6800
+    PSHA
+    STX VM_TMPX
+    LDAA VM_TMPX+1
+    ABA
+    STAA VM_TMPX+1
+    LDAA VM_TMPX
+    ADCA #0
+    STAA VM_TMPX
+    LDX VM_TMPX
+    PULA
+    .else
+    ABX
+    .endif
 	LDX	0,X
-	LDD	R1A		; RESTORE
+    .ifdef CPU6800
+    LDAA R1A
+    LDAB R1A+1
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD R1A
+    .endif
 	JMP	0,X		; GO EXECUTE THE PSEUDO-INSTR.
 
 ;*************************************************************
@@ -224,23 +351,56 @@ JTABLE
 ;-------------------------
 ; #0 LOAD REG WITH IMMED. VALUE
 LD1IM	LDX	PC
-	LDD	0,X
+    .ifdef CPU6800
+    LDAA 0,X
+    LDAB 0+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 0,X
+    .endif
 	JMP	BUMP2A
 
 ;-------------------------
 ; #1 LOAD STACK ADDRESS + OFFSET INTO REG
 LD1SOFF	STS	R1A	; SAVE STACK VALUE
 	LDX	PC
-	LDD	0,X	; GET OFFSET VALUE
-	ADDD	R1A
-	ADDD	#1	; ADD OFFSET + 1
+    .ifdef CPU6800
+    LDAA 0,X
+    LDAB 0+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 0,X
+    .endif
+    .ifdef CPU6800
+    ADDB R1A+1
+    ADCA R1A
+    JSR VM_FIXZ
+    .else
+    ADDD R1A
+    .endif
+    .ifdef CPU6800
+    ADDB #(1&255)
+    ADCA #/(1)
+    JSR VM_FIXZ
+    .else
+    ADDD #1
+    .endif
 	JMP	BUMP2A
 
 ;-------------------------
 ; #2  LOAD WORD @ ADDRESS
 LD1	LDX	PC
 	LDX	0,X	; GET ADDRESS
-	LDD	0,X	; GET WORD
+    .ifdef CPU6800
+    LDAA 0,X
+    LDAB 0+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 0,X
+    .endif
 	JMP	BUMP2
 
 ;-------------------------
@@ -256,7 +416,14 @@ LDB1A	JMP	BUMP2
 ;-------------------------
 ; #4  LOAD WORD INDIRECT (ADDR IN REG)
 LD1R	LDX	R1A	; GET ADDRESS
-	LDD	0,X	; GET WORD
+    .ifdef CPU6800
+    LDAA 0,X
+    LDAB 0+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 0,X
+    .endif
 	JMP	NEXT
 
 ;-------------------------
@@ -272,7 +439,14 @@ LDB1RA	JMP	NEXT
 ; #6  STORE WORD @ ADDRESS
 ST1	LDX	PC
 	LDX	0,X	; GET ADDRESS
-	STD	0,X	; STORE WORD
+    .ifdef CPU6800
+    STAA 0,X
+    STAB 0+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    STD 0,X
+    .endif
 	JMP	BUMP2
 
 ;-------------------------
@@ -286,7 +460,14 @@ STB1	LDX	PC
 ; #8  STORE WORD @ ADDRESS ON STACK
 ST1SP	TSX		; STACK TO INDEX
 	LDX	0,X	; GET ADDRESS
-	STD	0,X	; STORE WORD
+    .ifdef CPU6800
+    STAA 0,X
+    STAB 0+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    STD 0,X
+    .endif
 	INS
 	INS		; POP STACK
 	JMP	NEXT
@@ -316,7 +497,14 @@ EXG1	TSX
 	INS
 	PSHB
 	PSHA		; REG ON STACK
-	LDD	R1A	; NEW REG
+    .ifdef CPU6800
+    LDAA R1A
+    LDAB R1A+1
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD R1A
+    .endif
 	LDX	PC
 	JMP	NEXT2
 
@@ -337,7 +525,17 @@ BRZL	ORAA	R1B	; SET FLAGS
 JSRL	LDX	PC
 	INX		; ADJUST RETURN
 	INX		; -- ADDRESS
-	PSHX
+    .ifdef CPU6800
+    STAA VM_TMPA
+    STX VM_TMPX
+    LDAA VM_TMPX+1
+    PSHA
+    LDAA VM_TMPX
+    PSHA
+    LDAA VM_TMPA
+    .else
+    PSHX
+    .endif
 	BRA	JMPL
 
 ;-------------------------
@@ -346,7 +544,14 @@ JSRSP	TSX		; POINT TO STACK
 	LDX	0,X	; GET ADDRESS (NEW PC)
 	INS		; POP
 	INS
-	LDD	PC
+    .ifdef CPU6800
+    LDAA PC
+    LDAB PC+1
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD PC
+    .endif
 	PSHB
 	PSHA
 	JMP	NEXT2
@@ -362,12 +567,39 @@ RTSC	TSX
 ;-------------------------
 ; #17  MODIFY THE STACK POINTER
 MODSP	LDX	PC
-	LDD	0,X	; GET VALUE
+    .ifdef CPU6800
+    LDAA 0,X
+    LDAB 0+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 0,X
+    .endif
 	STS	STEMP
-	ADDD	STEMP	; ADD STACK POINTER
-	STD	STEMP
+    .ifdef CPU6800
+    ADDB STEMP+1
+    ADCA STEMP
+    JSR VM_FIXZ
+    .else
+    ADDD STEMP
+    .endif
+    .ifdef CPU6800
+    STAA STEMP
+    STAB STEMP+1
+    TSTA
+    JSR VM_FIXZ
+    .else
+    STD STEMP
+    .endif
 	LDS	STEMP	; NEW STACK POINTER
-	LDD	R1A	; RESTORE REGISTER
+    .ifdef CPU6800
+    LDAA R1A
+    LDAB R1A+1
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD R1A
+    .endif
 	JMP	BUMP2A
 
 ;---------------------------
@@ -379,14 +611,26 @@ DBL1	ASLB
 ;---------------------------
 ; #19  ADD REG AND TOP OF STACK (THEN POP)
 ADDS	TSX
-	ADDD	0,X	; DO THE ADD
+    .ifdef CPU6800
+    ADDB 0+1,X
+    ADCA 0,X
+    JSR VM_FIXZ
+    .else
+    ADDD 0,X
+    .endif
 	JMP	POPS	; POP & RETURN
 
 ;---------------------------
 ; #20  SUBTRACT REG FROM TOP OF STACK
 SUBFST	PULA		; GET VALUE OFF STACK
 	PULB
-	SUBD	R1A	; SUBTRACK REGISTER
+    .ifdef CPU6800
+    SUBB R1A+1
+    SBCA R1A
+    JSR VM_FIXZ
+    .else
+    SUBD R1A
+    .endif
 	JMP	NEXT
 
 ;---------------------------
@@ -404,7 +648,13 @@ M2	ROR	3,X	; SHIFT MULTIPLIER
 	DEC	0,X	; DONE ?
 	BMI	M4
 	BCC	M3
-	ADDD	1,X
+    .ifdef CPU6800
+    ADDB 1+1,X
+    ADCA 1,X
+    JSR VM_FIXZ
+    .else
+    ADDD 1,X
+    .endif
 
 M3	RORA
 	RORB		; SHIFT RESULT
@@ -432,19 +682,14 @@ DIV1R	JMP	NEXT
 
 ;-----------------------------
 ; #23  DIVIDE TOP OF STACK BY REG --- REMAINDER IN REG
-MOD	BSR	BDIV
-	INS		; CLEAN STACK
-	INS
-	PSHA		; TEMP SAVE
-	LDAA	DFLAG	; GET SIGN FLAG
-	BPL	MOD1
-	COMA
-
-MOD1	ANDA	#1	; MASK OFF BIT 0
-	PULA
-	BNE	DIV1N	; IF BIT 0 SET, NEGATE
-
-	JMP	NEXT
+MOD BSR BDIV
+    INS
+    INS
+    TST DFLAG
+    BPL MOD_RETURN
+    BSR NEGATE
+MOD_RETURN
+    JMP NEXT
 
 ;****************************************************
 ;   BASIC 16 BIT DIVIDE ROUTINE
@@ -454,7 +699,20 @@ MOD1	ANDA	#1	; MASK OFF BIT 0
 ;             REMAINDER IN A,B
 ;             SIGN FLAG IN DFLAG
 ;
-BDIV	CLR	DFLAG
+BDIV
+    TSTA
+    BNE BDIV_NONZERO
+    TSTB
+    BNE BDIV_NONZERO
+    .ifdef PYLDIN601
+    LDAA #2
+    STAA VM_ABORT
+    JMP VM_DONE
+    .else
+    INT $38
+    .endif
+BDIV_NONZERO
+    CLR DFLAG
 	TSTA			; CHECK DIVISOR SIGN
 	BPL	BDIV1
 
@@ -472,7 +730,14 @@ BDIV1	PSHB			; FORCE ON STACK
 	COM	DFLAG		; ADJUST FLAG
 	LDAB	6,X
 	BSR	NEGATE
-	STD	5,X
+    .ifdef CPU6800
+    STAA 5,X
+    STAB 5+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    STD 5,X
+    .endif
 
 BDIV2	CLRA
 	CLRB
@@ -488,7 +753,14 @@ UDIV1	CMPA	1,X
 UDIV2	CLC
 	BRA	UDIV4
 
-UDIV3	SUBD	1,X
+UDIV3
+    .ifdef CPU6800
+    SUBB 1+1,X
+    SBCA 1,X
+    JSR VM_FIXZ
+    .else
+    SUBD 1,X
+    .endif
 	SEC
 
 UDIV4	ROL	6,X
@@ -510,7 +782,13 @@ UDIV5	INS
 ; NEGATE THE VALUE IN A,B
 NEGATE	COMA
 	COMB
-	ADDD	#1
+    .ifdef CPU6800
+    ADDB #(1&255)
+    ADCA #/(1)
+    JSR VM_FIXZ
+    .else
+    ADDD #1
+    .endif
 	RTS
 
 ;----------------------------------
@@ -576,12 +854,26 @@ NOTR	COMA
 
 ;--------------------------------
 ; #31  ADD 1 TO REG
-INCR	ADDD	#1
+INCR
+    .ifdef CPU6800
+    ADDB #(1&255)
+    ADCA #/(1)
+    JSR VM_FIXZ
+    .else
+    ADDD #1
+    .endif
 	JMP	NEXT
 
 ;--------------------------------
 ; #32 SUBTRACT 1 FROM REG
-DECR	SUBD	#1
+DECR
+    .ifdef CPU6800
+    SUBB #(1&255)
+    SBCA #/(1)
+    JSR VM_FIXZ
+    .else
+    SUBD #1
+    .endif
 	JMP	NEXT
 
 ;****************************************************
@@ -593,9 +885,22 @@ DECR	SUBD	#1
 ;         (set means: top of stack < A,B )
 ;
 SCMP	TSX
-	LDD	2,X		; GET TOP OF STACK
-	SUBD	R1A		; SET CONDITION FLAGS
-	BPL	STCMP1		; SKIP IF PLUS
+    .ifdef CPU6800
+    LDAA 2,X
+    LDAB 2+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 2,X
+    .endif
+    .ifdef CPU6800
+    SUBB R1A+1
+    SBCA R1A
+    JSR VM_FIXZ
+    .else
+    SUBD R1A
+    .endif
+	BGE	STCMP1		; SKIP IF PLUS
 
 	STAB	R1B		; TEMP SAVE
 	ORAA	R1B		; SET/RESET ZERO FLAG
@@ -610,7 +915,14 @@ STCMP1	STAB	R1B
 ;  Unsigned compare, Carry set if top of stack < A,B
 ;
 BCMP	TSX
-	LDD	2,X		; GET TOP OF STACK
+    .ifdef CPU6800
+    LDAA 2,X
+    LDAB 2+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 2,X
+    .endif
 	CMPA	R1A		; CHECK TOP BYTE
 	BNE	BCMP1
 	CMPB	R1B
@@ -685,8 +997,26 @@ TRUE1	CLRA
 
 ;-------------------------------------
 ; #43  SWITCH TO EXECUTABLE (ASSEMBLY) CODE
-ASMC	LDX	PC	; POINT TO CODE
-	JMP	0,X	; GO EXECUTE IT
+ASMC LDX PC
+    .ifdef PYLDIN601
+    LDAA 0,X
+    CMPA #$3F
+    BNE VM_INLINE
+    LDAA 1,X
+    CMPA #$38
+    BNE VM_INLINE
+    JMP VM_DONE
+VM_INLINE
+    .ifdef CPU6800
+    LDAA R1A
+    LDAB R1A+1
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD R1A
+    .endif
+    .endif
+    JMP 0,X
 
 ;**********************************************************
 ;
@@ -724,7 +1054,7 @@ fopen	PROC
 	PULA
 FWRRD	PSHB
 	TSX
-	LDX	2,X
+	LDX	3,X
 	LDAB	1,X
 	CMPB	#'+'
 	PULB
@@ -752,7 +1082,15 @@ FOPENR	LDX	#FTABLE
 FEXIT	STAA	ERRNO
 	TSTA
 	BEQ	FOPEXIT
-FOPERR	LDD	#0	; FIXME STDIN
+FOPERR
+    .ifdef CPU6800
+    LDAA #/(0)
+    LDAB #(0&255)
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD #0
+    .endif
 FOPEXIT JMP	RTSC
 	ENDP
 
@@ -763,10 +1101,26 @@ FOPEXIT JMP	RTSC
 fclose	PROC
 	DB 86		; SWITCH TO IN-LINE
 	TSX
-	LDD	2,X		; FILE HANDLE
+    .ifdef CPU6800
+    LDAA 2,X
+    LDAB 2+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 2,X
+    .endif
 	TBA
 	INT	$4E
-	BRA	FEXIT
+    STAA ERRNO
+    TSTA
+    BEQ closed
+    LDAA #$FF
+    LDAB #$FF
+    JMP RTSC
+closed
+    CLRA
+    CLRB
+    JMP RTSC
 	ENDP
 
 ;--------------------------------------------------
@@ -778,7 +1132,14 @@ getc	PROC
 	GLOBAL	FRWERR
 	DB	86
 	TSX
-	LDD	2,X
+    .ifdef CPU6800
+    LDAA 2,X
+    LDAB 2+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 2,X
+    .endif
 	TBA
 	LDX	#FCHARIO
 	INT	$4C
@@ -790,7 +1151,15 @@ FRWERR	STAA	ERRNO
 	LDAB	FCHARBUF
 	CLRA
 	BRA	GETCOK
-GETCER	LDD	#-1
+GETCER
+    .ifdef CPU6800
+    LDAA #/(-1)
+    LDAB #(-1&255)
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD #-1
+    .endif
 GETCOK	JMP	RTSC
 	ENDP
 
@@ -816,7 +1185,14 @@ getchar	PROC
 	INT	$20
 	CMPA	#$1A		; COMPARE TO CNTRL-Z (EOF)
 	BNE	GETCHOK		; NO
-	LDD	#-1		; YES...
+    .ifdef CPU6800
+    LDAA #/(-1)
+    LDAB #(-1&255)
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD #-1
+    .endif
 	BRA	GETCH1
 GETCHOK	TAB			;  COPY CHAR IN A
 	CLRA
@@ -849,7 +1225,14 @@ gets	PROC
 	INT	$21
 	CLRA
 	TSX
-	LDD	2,X
+    .ifdef CPU6800
+    LDAA 2,X
+    LDAB 2+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 2,X
+    .endif
 	JMP	RTSC
 	ENDP
 
@@ -862,7 +1245,14 @@ puts	PROC
 	INT	$23
 	LDAA	#10
 	INT	$22
-	LDD	#1
+    .ifdef CPU6800
+    LDAA #/(1)
+    LDAB #(1&255)
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD #1
+    .endif
 	JMP	RTSC
 	ENDP
 
@@ -1026,7 +1416,14 @@ isspace	PROC
 toupper	PROC
 	DB	86
 	TSX
-	LDD	2,X
+    .ifdef CPU6800
+    LDAA 2,X
+    LDAB 2+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 2,X
+    .endif
 	TSTA
 	BNE	TOUPP1	;  SKIP IF MSB'S NOT ZERO
 	CMPB	#'a'
@@ -1044,7 +1441,14 @@ TOUPP1	JMP	RTSC
 tolower	PROC
 	DB	86
 	TSX
-	LDD	2,X
+    .ifdef CPU6800
+    LDAA 2,X
+    LDAB 2+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 2,X
+    .endif
 	TSTA
 	BNE	TOLOW1
 	CMPB	#'A'
@@ -1062,13 +1466,47 @@ TOLOW1	JMP	RTSC
 strclr	PROC
 	DB	86
 	TSX
-	LDD	2,X	; GET LENGTH OF STRING
+    .ifdef CPU6800
+    LDAA 2,X
+    LDAB 2+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 2,X
+    .endif
 	LDX	4,X	; POINT TO STRING
-SCLR1	CLR	0,X
+    .ifdef CPU6800
+    STAA STEMP
+    STAB STEMP+1
+    TSTA
+    JSR VM_FIXZ
+    .else
+    STD STEMP
+    .endif
+    ORAA STEMP+1
+    .ifdef CPU6800
+    LDAA STEMP
+    LDAB STEMP+1
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD STEMP
+    .endif
+    BEQ SCLR3
+SCLR1 CLR 0,X
 	INX
-	SUBD	#1
+    .ifdef CPU6800
+    SUBB #(1&255)
+    SBCA #/(1)
+    JSR VM_FIXZ
+    .else
+    SUBD #1
+    .endif
 	BNE	SCLR1
-SCLR3	JMP	RTSC
+SCLR3	TSX
+    LDAA 4,X
+    LDAB 5,X
+    JMP RTSC
 	ENDP
 ;
 ;-----------------------------------------------
@@ -1091,7 +1529,13 @@ strlen	PROC
 loop	TST	0,X	; look for NULL
 	BEQ	exit	; found !!
 	INX
-	ADDD	#1	; bump counter
+    .ifdef CPU6800
+    ADDB #(1&255)
+    ADCA #/(1)
+    JSR VM_FIXZ
+    .else
+    ADDD #1
+    .endif
 	BRA	loop
 exit	JMP	RTSC
 	ENDP
@@ -1103,25 +1547,82 @@ exit	JMP	RTSC
 strcpy	PROC
 	DB	86
 	TSX
-	LDD	4,X		; POINT TO S1
-	STD	X2TMP		; SAVE POINTER
-	LDD	2,X		; POINT TO S2
-	STD	X1TMP		;
-	XGDX
+    .ifdef CPU6800
+    LDAA 4,X
+    LDAB 4+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 4,X
+    .endif
+    .ifdef CPU6800
+    STAA X2TMP
+    STAB X2TMP+1
+    TSTA
+    JSR VM_FIXZ
+    .else
+    STD X2TMP
+    .endif
+    .ifdef CPU6800
+    LDAA 2,X
+    LDAB 2+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 2,X
+    .endif
+    .ifdef CPU6800
+    STAA X1TMP
+    STAB X1TMP+1
+    TSTA
+    JSR VM_FIXZ
+    .else
+    STD X1TMP
+    .endif
+    .ifdef CPU6800
+    STX VM_TMPX
+    STAA STEMP
+    STAB STEMP+1
+    LDX STEMP
+    LDAA VM_TMPX
+    LDAB VM_TMPX+1
+    .else
+    XGDX
+    .endif
 	CLRA
 	CLRB
 loop	TST	0,X
 	BEQ	copy
-	ADDD	#1
+    .ifdef CPU6800
+    ADDB #(1&255)
+    ADCA #/(1)
+    JSR VM_FIXZ
+    .else
+    ADDD #1
+    .endif
 	INX
 	BRA	loop
-copy	ADDD	#1		; zero - end of string
+copy
+    .ifdef CPU6800
+    ADDB #(1&255)
+    ADCA #/(1)
+    JSR VM_FIXZ
+    .else
+    ADDD #1
+    .endif
 	PSHB			; Pyldin use BA instead of AB :(
 	TAB
 	PULA
 	LDX	#X1TMP
 	INT	$2D		; memmove
-	LDD	X2TMP
+    .ifdef CPU6800
+    LDAA X2TMP
+    LDAB X2TMP+1
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD X2TMP
+    .endif
 	JMP	RTSC
 	ENDP
 ;
@@ -1153,7 +1654,10 @@ SCAT2	STX	X1TMP	; SAVE POINTER
 	INX
 	BRA	SCAT2
 
-SCAT3	JMP	RTSC
+SCAT3	TSX
+    LDAA 4,X
+    LDAB 5,X
+    JMP RTSC
 	ENDP
 ;
 ;--------------------------------------------
@@ -1177,115 +1681,221 @@ SCAT3	JMP	RTSC
 ;}
 ;
 
-strcmp	PROC
-	DB	86
-	TSX
-	LDD	4,X	; POINT TO S1
-	STD	X1TMP
-	LDX	2,X	; POINT TO S2
-
-loop	LDAB	0,X	; GET S1 CHAR
-	INX
-	STX	X2TMP
-	LDX	X1TMP
-	LDAA	0,X
-	BEQ	s1exit
-	SBA		; COMPARE BY SUBTRACTING
-	BNE	exit
-	INX
-	STX	X1TMP
-	LDX	X2TMP
-	BRA	loop
-
-s1exit	SBA
-	BEQ	exit1
-exit	TAB
-	CLRA
-	TSTB
-	BPL	exit1
-	COMA
-exit1	JMP	RTSC
+strcmp PROC
+    DB 86
+    TSX
+    LDX 4,X
+    STX X1TMP
+    TSX
+    LDX 2,X
+    STX X2TMP
+loop
+    LDX X1TMP
+    LDAA 0,X
+    INX
+    STX X1TMP
+    LDX X2TMP
+    CMPA 0,X
+    BNE different
+    INX
+    STX X2TMP
+    TSTA
+    BNE loop
+    CLRA
+    CLRB
+    JMP RTSC
+different
+    BCS less
+    CLRA
+    LDAB #1
+    JMP RTSC
+less
+    LDAA #$FF
+    LDAB #$FF
+    JMP RTSC
 	ENDP
 
 ;
 ;--------------------------------------------
 ;  exit()
-sysexit	PROC
-	DB	86
-	INT	$38
+sysexit PROC
+    DB 86
+    .ifdef PYLDIN601
+    TSX
+    LDAA 3,X
+    STAA VM_STATUS
+    JMP VM_DONE
+    .else
+    INT $38
+    .endif
 	ENDP
 
 ;
 ;--------------------------------------------
 ;  fgets(s, size, stream)
-fgets	PROC
-	DB	86
-	TSX
-	LDAB	5,X	; POINT TO size
-	LDX	6,X	; POINT to s
-loop	PSHB
-	PSHX
-	TSX
-	LDAA	6,X	; POINT TO stream
-	LDX	#FCHARIO
-	INT	$4C
-	STAA	ERRNO
-	CPX	#1
-	PULX
-	PULB
-	BNE	error
-	TST	ERRNO
-	BNE	error
-	LDAA	FCHARBUF
-	STAA	0,X
-	INX
-	CMPA	#10
-	BEQ	endstr
-	DECB
-	BNE	loop
-endstr	CLR	0,X
-	BRA	ok
-error	CLRB
-	CLRA
-exit	JMP	RTSC
-ok	TSX
-	LDD	6,X
-	BRA	exit
-	ENDP
+fgets PROC
+    DB 86
+    TSX
+    .ifdef CPU6800
+    LDAA 4,X
+    LDAB 4+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 4,X
+    .endif
+    .ifdef CPU6800
+    SUBB #(1&255)
+    SBCA #/(1)
+    JSR VM_FIXZ
+    .else
+    SUBD #1
+    .endif
+    BMI empty
+    BEQ terminate
+    STAA STEMP
+    STAB STEMP+1
+    LDX 6,X
+loop
+    STX X1TMP
+    TSX
+    LDAA 3,X
+    LDX #FCHARIO
+    INT $4C
+    STAA ERRNO
+    TSTA
+    BNE endfile
+    CPX #1
+    BNE endfile
+    LDX X1TMP
+    LDAA FCHARBUF
+    STAA 0,X
+    INX
+    CMPA #10
+    BEQ finish
+    .ifdef CPU6800
+    LDAA STEMP
+    LDAB STEMP+1
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD STEMP
+    .endif
+    .ifdef CPU6800
+    SUBB #(1&255)
+    SBCA #/(1)
+    JSR VM_FIXZ
+    .else
+    SUBD #1
+    .endif
+    .ifdef CPU6800
+    STAA STEMP
+    STAB STEMP+1
+    TSTA
+    JSR VM_FIXZ
+    .else
+    STD STEMP
+    .endif
+    BNE loop
+finish
+    CLR 0,X
+    TSX
+    .ifdef CPU6800
+    LDAA 6,X
+    LDAB 6+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 6,X
+    .endif
+    JMP RTSC
+endfile
+    LDX X1TMP
+    TSX
+    CPX #0
+    LDX X1TMP
+    ; A partial last line is still returned.
+    STX X2TMP
+    TSX
+    .ifdef CPU6800
+    LDAA 6,X
+    LDAB 6+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 6,X
+    .endif
+    .ifdef CPU6800
+    SUBB X2TMP+1
+    SBCA X2TMP
+    JSR VM_FIXZ
+    .else
+    SUBD X2TMP
+    .endif
+    BNE partial
+empty
+    .ifdef CPU6800
+    LDAA #/(0)
+    LDAB #(0&255)
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD #0
+    .endif
+    JMP RTSC
+partial
+    LDX X1TMP
+    BRA finish
+terminate
+    LDX 6,X
+    BRA finish
+    ENDP
 
 ;
 ;--------------------------------------------
 ;  fputs(s, stream)
-fputs	PROC
-	DB	86
-	TSX
-	LDX	4,X
-	LDAA	3,X
-	CLRB
-loop	TST	0,X
-	BEQ	write
-	INCB
-	INX
-	BRA	loop
-write	TSX
-	LDX	4,X
-	PSHB		;
-	CLRB
-	PSHB		;
-	PSHX		;
-	INT	$4D
-	STAA	ERRNO
-	INS
-	INS
-	INS
-	INS
-	TSTA
-	BEQ	ok
-	LDD	#-1
-exit	JMP	RTSC
-ok	XGDX
-	BRA	exit
-	ENDP
+fputs PROC
+    DB 86
+    TSX
+    LDX 4,X
+    CLRA
+    CLRB
+loop
+    TST 0,X
+    BEQ write
+    INX
+    ADDB #1
+    ADCA #0
+    BRA loop
+write
+    PSHB
+    PSHA
+    TSX
+    LDX 6,X
+    STX X1TMP
+    LDAA X1TMP+1
+    PSHA
+    LDAA X1TMP
+    PSHA
+    TSX
+    LDAA 7,X
+    INT $4D
+    STAA ERRNO
+    INS
+    INS
+    INS
+    INS
+    TSTA
+    BNE error
+    STX R1A
+    LDAA R1A
+    LDAB R1B
+    JMP RTSC
+error
+    LDAA #$FF
+    LDAB #$FF
+    JMP RTSC
+    ENDP
 
 ;
 ;--------------------------------------------
@@ -1294,29 +1904,66 @@ fread	PROC
 	GLOBAL	freader
 	DB	86
 	TSX
-	LDD	4,X	; N
+    .ifdef CPU6800
+    LDAA 4,X
+    LDAB 4+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 4,X
+    .endif
 	LDX	6,X	; SIZE
-	INT	$EE
+	JSR VM_MULSIZE
 	TSX
 	LDX	8,X	; S
 	PSHB
 	PSHA
-	PSHX
+    .ifdef CPU6800
+    STAA VM_TMPA
+    STX VM_TMPX
+    LDAA VM_TMPX+1
+    PSHA
+    LDAA VM_TMPX
+    PSHA
+    LDAA VM_TMPA
+    .else
+    PSHX
+    .endif
 	TSX
 	LDAA	7,X	; STREAM
 	INT	$4C
-freader	STAA	ERRNO
-	INS
-	INS
-	INS
-	INS
-	TSTA
-	BEQ	ok
-	CLRB
-	CLRA
-exit	JMP	RTSC
-ok	XGDX
-	BRA	exit
+freader STAA ERRNO
+    INS
+    INS
+    INS
+    INS
+    TSTA
+    BNE error
+    STX STEMP
+    TSX
+    LDX 6,X
+    STX X2TMP
+    LDAA X2TMP
+    ORAA X2TMP+1
+    BEQ error
+    LDAA STEMP
+    LDAB STEMP+1
+    LDX #0
+count
+    SUBB X2TMP+1
+    SBCA X2TMP
+    BCS finish
+    INX
+    BRA count
+finish
+    STX R1A
+    LDAA R1A
+    LDAB R1B
+    JMP RTSC
+error
+    CLRA
+    CLRB
+    JMP RTSC
 	ENDP
 
 ;
@@ -1325,14 +1972,31 @@ ok	XGDX
 fwrite	PROC
 	DB	86
 	TSX
-	LDD	4,X	; N
+    .ifdef CPU6800
+    LDAA 4,X
+    LDAB 4+1,X
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD 4,X
+    .endif
 	LDX	6,X	; SIZE
-	INT	$EE
+	JSR VM_MULSIZE
 	TSX
 	LDX	8,X	; S
 	PSHB
 	PSHA
-	PSHX
+    .ifdef CPU6800
+    STAA VM_TMPA
+    STX VM_TMPX
+    LDAA VM_TMPX+1
+    PSHA
+    LDAA VM_TMPX
+    PSHA
+    LDAA VM_TMPA
+    .else
+    PSHX
+    .endif
 	TSX
 	LDAA	7,X	; STREAM
 	INT	$4D
@@ -1356,13 +2020,21 @@ feof	PROC
 ;
 ;--------------------------------------------
 ;  fflush(stream)
-fflush	PROC
-	DB	86
-	TSX
-	LDAA	3,X
-	INT	$5A
-	STAB	ERRNO
-	JMP	RTSC
+fflush PROC
+    DB 86
+    TSX
+    LDAA 3,X
+    INT $5A
+    STAA ERRNO
+    TSTA
+    BNE error
+    CLRA
+    CLRB
+    JMP RTSC
+error
+    LDAA #$FF
+    LDAB #$FF
+    JMP RTSC
 	ENDP
 
 ;
@@ -1378,7 +2050,14 @@ fseek	PROC
 	STAA	ERRNO
 	TSTA
 	BEQ	ok
-	LDD	#-1
+    .ifdef CPU6800
+    LDAA #/(-1)
+    LDAB #(-1&255)
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD #-1
+    .endif
 exit	JMP	RTSC
 ok	CLRB
 	BRA	exit
@@ -1397,9 +2076,26 @@ ftell	PROC
 	STAA	ERRNO
 	TSTA
 	BEQ	ok
-	LDD	#-1
+    .ifdef CPU6800
+    LDAA #/(-1)
+    LDAB #(-1&255)
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD #-1
+    .endif
 exit	JMP	RTSC
-ok	XGDX
+ok
+    .ifdef CPU6800
+    STX VM_TMPX
+    STAA STEMP
+    STAB STEMP+1
+    LDX STEMP
+    LDAA VM_TMPX
+    LDAB VM_TMPX+1
+    .else
+    XGDX
+    .endif
 	BRA	exit
 	ENDP
 
@@ -1413,7 +2109,14 @@ unlink	PROC
 	INT	$4F
 	STAA	ERRNO
 	BEQ	ok
-	LDD	#-1
+    .ifdef CPU6800
+    LDAA #/(-1)
+    LDAB #(-1&255)
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD #-1
+    .endif
 exit	JMP	RTSC
 ok	CLRB
 	BRA	exit
@@ -1459,6 +2162,249 @@ getstrerr PROC
 ;
 ;****************************************************
 ;
+
+; Fix the full-word Z flag after a classic pair of byte operations.
+; N/V/C already describe the high byte. A/B/X and all other flags survive.
+VM_FIXZ
+    BNE VM_FIXZ_END
+    PSHA
+    TPA
+    PSHA
+    TSTB
+    BEQ VM_FIXZ_ZERO
+    PULA
+    ANDA #$FB
+    BRA VM_FIXZ_SET
+VM_FIXZ_ZERO
+    PULA
+VM_FIXZ_SET
+    TAP
+    PULA
+VM_FIXZ_END
+    RTS
+
+; Low 16-bit unsigned product D * X, independent of INT EE.
+VM_MULSIZE
+    STX X2TMP
+    .ifdef CPU6800
+    STAA X1TMP
+    STAB X1TMP+1
+    TSTA
+    JSR VM_FIXZ
+    .else
+    STD X1TMP
+    .endif
+    CLR STEMP
+    CLR STEMP+1
+    LDAB #16
+VM_MULT_LOOP
+    LSR X2TMP
+    ROR X2TMP+1
+    BCC VM_MULT_SHIFT
+    LDAA STEMP+1
+    ADDA X1TMP+1
+    STAA STEMP+1
+    LDAA STEMP
+    ADCA X1TMP
+    STAA STEMP
+VM_MULT_SHIFT
+    ASL X1TMP+1
+    ROL X1TMP
+    DECB
+    BNE VM_MULT_LOOP
+    .ifdef CPU6800
+    LDAA STEMP
+    LDAB STEMP+1
+    TSTA
+    JSR VM_FIXZ
+    .else
+    LDD STEMP
+    .endif
+    RTS
+
+    .ifdef PYLDIN601
+; All per-call state, previous vectors and executable error thunks live on
+; the ordinary stack. Save the complete application direct-page workspace.
+VM_ENTRY
+    LDX #$100
+    LDAB #32
+VM_SAVE_DP
+    DEX
+    LDAA 0,X
+    PSHA
+    DECB
+    BNE VM_SAVE_DP
+    LDX $07
+    STX PC
+    CLR VM_ABORT
+    CLR VM_STATUS
+    CLR R1A
+    CLR R1B
+    LDX #VM_THUNKS_END
+    LDAB #VM_THUNKS_END-VM_THUNKS
+VM_SAVE_CODE
+    DEX
+    LDAA 0,X
+    PSHA
+    DECB
+    BNE VM_SAVE_CODE
+    LDAA #4
+    INT $2E
+    PSHB
+    .ifdef CPU6800
+    STAA VM_TMPA
+    STX VM_TMPX
+    LDAA VM_TMPX+1
+    PSHA
+    LDAA VM_TMPX
+    PSHA
+    LDAA VM_TMPA
+    .else
+    PSHX
+    .endif
+    LDAA #7
+    INT $2E
+    PSHB
+    .ifdef CPU6800
+    STAA VM_TMPA
+    STX VM_TMPX
+    LDAA VM_TMPX+1
+    PSHA
+    LDAA VM_TMPX
+    PSHA
+    LDAA VM_TMPA
+    .else
+    PSHX
+    .endif
+    STS VM_FRAME
+    TSX
+    LDAB #6
+    .ifdef CPU6800
+    PSHA
+    STX VM_TMPX
+    LDAA VM_TMPX+1
+    ABA
+    STAA VM_TMPX+1
+    LDAA VM_TMPX
+    ADCA #0
+    STAA VM_TMPX
+    LDX VM_TMPX
+    PULA
+    .else
+    ABX
+    .endif
+    CLRB
+    LDAA #4
+    INT $2F
+    TSX
+    LDAB #11
+    .ifdef CPU6800
+    PSHA
+    STX VM_TMPX
+    LDAA VM_TMPX+1
+    ABA
+    STAA VM_TMPX+1
+    LDAA VM_TMPX
+    ADCA #0
+    STAA VM_TMPX
+    LDX VM_TMPX
+    PULA
+    .else
+    ABX
+    .endif
+    CLRB
+    LDAA #7
+    INT $2F
+    LDX #FCHARBUF
+    STX FCHARIO
+    LDX #1
+    STX FCHARIO+2
+    LDX CURR_PCB
+    LDAB ARGC,X
+    CLRA
+    .ifdef CPU6800
+    STX VM_TMPX
+    STAA STEMP
+    STAB STEMP+1
+    LDX STEMP
+    LDAA VM_TMPX
+    LDAB VM_TMPX+1
+    .else
+    XGDX
+    .endif
+    .ifdef CPU6800
+    ADDB #(ARGV&255)
+    ADCA #/(ARGV)
+    JSR VM_FIXZ
+    .else
+    ADDD #ARGV
+    .endif
+    .ifdef CPU6800
+    STAA VM_TMPA
+    STX VM_TMPX
+    LDAA VM_TMPX+1
+    PSHA
+    LDAA VM_TMPX
+    PSHA
+    LDAA VM_TMPA
+    .else
+    PSHX
+    .endif
+    PSHB
+    PSHA
+    LDX PC
+    JMP NEXT2
+VM_DONE
+    LDS VM_FRAME
+    TSX
+    LDAB 2,X
+    LDX 0,X
+    LDAA #7
+    INT $2F
+    INS
+    INS
+    INS
+    TSX
+    LDAB 2,X
+    LDX 0,X
+    LDAA #4
+    INT $2F
+    INS
+    INS
+    INS
+    LDAB #VM_THUNKS_END-VM_THUNKS
+VM_DROP_CODE
+    INS
+    DECB
+    BNE VM_DROP_CODE
+    LDAA VM_ABORT
+    BNE VM_FAILED
+    LDAA VM_STATUS
+    BRA VM_RESULT
+VM_FAILED
+    LDAA #$FF
+VM_RESULT
+    STAA $06
+    LDX #$E0
+    LDAB #32
+VM_RESTORE_DP
+    PULA
+    STAA 0,X
+    INX
+    DECB
+    BNE VM_RESTORE_DP
+    RTS
+; These five-byte thunks are copied, never executed from the ROM window.
+VM_THUNKS
+    LDAA #1
+    STAA VM_ABORT
+    RTS
+    LDAA #3
+    STAA $06
+    RTS
+VM_THUNKS_END
+    .endif
+
 	CHECKSUM
 	DS	$E000-*,$FF
 ; 

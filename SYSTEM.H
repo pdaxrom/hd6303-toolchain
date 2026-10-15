@@ -41,7 +41,28 @@ geterrno	EQU	ZVM_BASE+$188
 getstrerr	EQU	ZVM_BASE+$18C
 EOF		EQU -1
 
-__START		PROC
+__START PROC
+    .ifdef PYLDIN601
+    LDAA #$EF
+    INT $2E
+    CPX #0
+    BEQ ERROR
+    CLRA
+    INT $EF
+    CMPA #1
+    BNE ERROR
+    CPX #$5A56
+    BNE ERROR
+    LDX #__CODE
+    LDAA #1
+    INT $EF
+    RTS
+ERROR LDX #ERRTXT
+    INT $23
+    RTS
+ERRTXT DB 'ZCodeVM unavailable.',10,0
+    .else
+
 		LDAA	#$E8
 		INT	$2E
 		CPX	#0
@@ -53,6 +74,7 @@ ERROR		LDX	#ERRTXT
 		INT	$23
 		RTS
 ERRTXT		DB	'Cannot execute - ZCodeVM not installed.', 10, 0
+    .endif
 		ENDP
 		DS	(__START + $40) - *
 __CODE

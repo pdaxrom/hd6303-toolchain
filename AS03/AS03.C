@@ -37,7 +37,7 @@
  */
 #define LINESIZE  128
 #define HASHSIZE  257
-#define SYMSIZE 20000
+#define SYMSIZE 16200
 #define PROCSIZE   16
 #define IFDEFSIZE  16
 #define INCFISIZE  16
@@ -51,6 +51,10 @@
 #define SYMBLBL 0x40
 #define SYMBCAL 0x20
 #define SYMBDEF 0x10
+#define SYMBBSS 1
+#define SYMBEXT 2
+#define SYMBPUB 4
+#define SYMBFWD 8
 
 /*
  * 6800 addressing modes
@@ -74,6 +78,10 @@
 char obj[LINESIZE];			/* object code output buffer */
 char ibuf[LINESIZE];			/* input buffer */
 char sbuf[LINESIZE];			/* symbol buffer */
+char prepool[192];
+int pretbl[32];
+int precnt, preused;
+int opnames[192], opvals[192], opcount;
 char symtab[SYMSIZE];			/* symbol table */
 char *ofile;				/* output file */
 char *endsym;				/* end of symbol table */
@@ -131,6 +139,11 @@ FILE *outpgm;				/* pgm output */
 char pfile[40];				/* pgm file name */
 char bfile[40];				/* bin file name */
 int relsize;				/* size of reltable */
+int makeobj, npub, nextidx, sectkind, radix, flgext;
+int refvalue, refpart, entry, entryset;
+char *codesize, *bssused;
+char rfile[40];
+
 
 int ifdefcnt;				/* ifdef stack counter */
 char ifdefstk[IFDEFSIZE];		/* ifdef stack */
@@ -152,6 +165,7 @@ int *argv[];
 	lfile = NULL;
 	list = FALSE;			/* default no listing */
 	bintype = BIN_PGM;
+        entry = -1;
 	outpgm = NULL;
 
 	printf("HD6303 Assembler v1.1\n");
@@ -184,7 +198,9 @@ int *argv[];
 				--argc;
 				argv++;
 			} */
-		} else if (strcmp(argv[0], "-l") == SAME) {
+		} else if (strcmp(argv[0], "-c") == SAME) {
+                        makeobj = 1;
+                } else if (strcmp(argv[0], "-l") == SAME) {
 			list++;
 			if (argc > 3) {
 				lfile = argv[1];
@@ -211,6 +227,14 @@ int *argv[];
 		usage();
 
 	ifile = argv[0];
+        if (ofile) {
+          tag = ofile + strlen(ofile);
+          if (tag - ofile >= 4) {
+            tag = tag - 4;
+            if (strcmp(tag,".OBJ")==0 | strcmp(tag,".obj")==0)
+              makeobj = 1;
+          }
+        }
 
 	if (lfile) {
 		if ((outlst = fopen(lfile, IO_W)) == NULL)
@@ -227,6 +251,8 @@ int *argv[];
 		ifdefcnt = 0;
 		ignotdef = 0;
 		nsect = 0;
+                sectkind = 0; bssused = 0; radix = 10;
+                entryset = 0; entry = -1;
 		nproc = 0;
 		nset = 0;
 		loc = 0;
@@ -244,44 +270,19 @@ int *argv[];
 			fatal(-1);
 		}
 
-		if (pass == 2) {
-			if (bintype == BIN_PGM) {
-				if (ofile)
-				    strcpy(pfile, ofile);
-				else
-				    addext(pfile, ifile, ".PGM");
-
-				if ((outpgm = fopen(pfile, "w+")) == NULL) {
-					printf("unias: Cannot open %s\n", pfile);
-					fatal(-1);
-				}
-				outword(0xA55A);
-				outword(0x0000); /* rel table size in words */
-				outword(0x0000); /* code offset */
-				outword(0x0000); /* code size */
-				outword(0x0000); /* entry point offset */
-				outword(0x0000); /* data size */
-				outword(0x0000);
-				outword(0x0000);
-				addext(bfile, ifile, ".TMP");
-				relsize = 0;
-			} else {
-				if (ofile)
-					strcpy(bfile, ofile);
-				else
-					addext(bfile, ifile, ".CMD");
-			}
-
-			if ((out = fopen(bfile, "w+")) == NULL) {
-				printf("unias: Cannot open %s\n", bfile);
-				fatal(-1);
-			}
-		}
+                if (pass == 2) beginout(ifile);
 
 		doasm();
-		fclose(in[0]);
-
-		pass++;
+                if (nsect) ends();
+                while (incnt>0) fclose(in[incnt--]);
+		fclose(in[0]); in[0]=0;
+                if (pass == 1) {
+                  codesize = loc;
+                  rebasebss();
+                }
+                if (pass==2 & bintype!=BIN_CMD & filepos!=codesize)
+                  error("Phase error: code size changed");
+                pass++;
 	}
 
 	if (list)
@@ -301,33 +302,8 @@ int *argv[];
 			fatal(-1);
 		}
 		fclose(out);
-	} else if (outpgm) {
-		fclose(out);
-		if ((out = fopen(bfile, "r")) == NULL) {
-			printf("unias: Cannot open %s\n", bfile);
-			fatal(-1);
-		}
-
-		while ((chkpos = fread(symtab, 1, 256, out)) > 0) {
-		    if (fwrite(symtab, 1, chkpos, outpgm) != chkpos) {
-			printf("Error write PGM file.\n");
-			fatal(-1);
-		    }
-		}
-
-		fpos[0] = 0;
-		fpos[1] = 2;
-		fseek(outpgm, fpos, 0);
-		outword(relsize);
-		outword(0x10 + relsize * 2);
-		outword(filepos);
-		fpos[1] = 0x10 + relsize * 2;
-
-		fclose(outpgm);
-		fclose(out);
-		unlink(bfile);
-	} else
-		fclose(out);
+        } else if (outpgm) finishout();
+        else fclose(out);
 
 	if (outlst > 2)
 		fclose(outlst);
@@ -363,7 +339,7 @@ char *ext;
  */
 usage()
 {
-	printf("usage:\nunias [-l [listfile]] [-o outfile] file\n");
+	printf("unias [-c] [-D ident] [-l list] [-o output] file\n");
 	fatal(-1);
 }
 
@@ -542,6 +518,11 @@ prehash()
 	installop(".ENDIF",	dendif| 0x8000);
 	installop(".DEFINE",	ddefine|0x8000);
 	installop(".UNDEF",	dundef| 0x8000);
+        installop("PUBLIC", public_ | 0x8000);
+        installop("EXTERN", extern_ | 0x8000);
+        installop("MAIN", main_ | 0x8000);
+        installop("RADIX", radix_ | 0x8000);
+        installop("CHKSUM", chksum | 0x8000);
 
 	start = freeptr;
 }
@@ -595,7 +576,8 @@ char *gtag;
 	int ret;
 	char *tmp;
 
-	if ((tag = hashfind(sbuf)) == NULL) {
+	tag = hashfind(sbuf);
+        if (tag == NULL | ((tag[NAME] & SYMBFWD) != 0)) {
 		if (match('=')) {
 			tag = installsym();
 			ret = TRUE;
@@ -605,8 +587,9 @@ char *gtag;
 			tag = installsym();
 			ret = TRUE;
 		} else {
-			tag = install(sbuf, loc);
-			*(tag + NAME) = *(tag + NAME) | SYMBLBL;
+			if (tag == NULL) tag = install(sbuf,loc);
+                        mputw(tag+VALUE,loc);
+                        tag[NAME] = (tag[NAME] & SYMBPUB) | labelkind();
 			ret = FALSE;
 		}
 		if (gtag) {
@@ -656,19 +639,23 @@ getlab()
 
 installsym()
 {
-	char *tag;
-	tag = install(sbuf, exp_());
-	if (flgrel)
-		*(tag + NAME) = *(tag + NAME) | SYMBLBL;
-	return tag;
+ char *tag;
+ int val, kind;
+ val = exp_(); kind = typeflag();
+ tag = hashfind(sbuf);
+ if (tag == NULL) tag = install(sbuf,val);
+ mputw(tag+VALUE,val);
+ tag[NAME] = (tag[NAME] & SYMBPUB) | kind;
+ return tag;
 }
 
 updatesym(tag)
 char *tag;
 {
-	mputw(tag + VALUE, exp_());
-	if (flgrel)
-		*(tag + NAME) = *(tag + NAME) | SYMBLBL;
+ int val;
+ val = exp_();
+ mputw(tag+VALUE,val);
+ tag[NAME] = (tag[NAME] & SYMBPUB) | typeflag();
 }
 
 /*
@@ -692,14 +679,9 @@ qmnem()
 		}
 	}
 
-	*sbuf = 0x7F ^ *sbuf;
-	if ((tag = hashfind(sbuf)) < start) {
-		mnem(tag);
-		return(TRUE);
-	}
-	else {
-		return(FALSE);
-	}
+        tag=findop(sbuf);
+        if (tag) { mnem(tag); return TRUE; }
+        return FALSE;
 }
 
 /*
@@ -711,7 +693,7 @@ char *tag;
 	char *p;
 	int mode;
 
-	p = mgetw(tag + VALUE);
+	p = mgetw(tag);
 
 	if (p & 0x8000) {
 		nbytes = 0;
@@ -829,15 +811,16 @@ int flag;
 	val = exp_();
 	if (flag & 1) {
 		if (pass == 2 & bintype != BIN_CMD) {
-			if (flgrel)
-				outrel(loc + 1);
+			if (flgrel) emitref(loc+1,3);
 		}
 		nbytes = 3;
 		obj[1] = val >> 8;
 		obj[2] = val & 0xFF;
 	} else {
 		nbytes = 2;
-		obj[1] = val & 0xFF;
+                if (pass == 2 & flgrel!=0 & bintype != BIN_CMD)
+                  emitref(loc+1,refpart+1-(refpart!=0));
+                obj[1] = val & 0xFF;
 	}
 	return(IMMED);
 }
@@ -873,8 +856,7 @@ extended(oper)
 int oper;
 {
 	if (pass == 2 & bintype != BIN_CMD) {
-		if (flgrel)
-			outrel(loc + 1);
+		if (flgrel) emitref(loc+1,3);
 	}
 	nbytes = 3;
 	obj[1] = oper >> 8;
@@ -891,6 +873,7 @@ relative()
 
 	nbytes = 2;
 	offset = exp_() - loc - 2;
+        if (flgrel == 3) error("External branch not allowed");
 	if (offset < -128 | offset > 127) {
 		if (pass == 1)
 			offset = 0;
@@ -906,7 +889,8 @@ relative()
  */
 org()
 {
-	bintype = BIN_CMD;	/* relocation disabled = CMD */
+	if (makeobj | nsect) error("ORG not allowed here");
+        bintype = BIN_CMD; /* relocation disabled = CMD */
 
 	loc = exp_();
 	if (nset++ == 0)
@@ -929,7 +913,9 @@ fillb()
 	oldloc = loc;
 	loc = loc + count;
 
-	if (pass == 2 & nsect == 0) {
+	if (loc < oldloc) error("Address overflow");
+        if (nsect & fill!=0) error("Initialized data in SECTION");
+        if (pass == 2 & nsect == 0) {
 		while (oldloc++ < loc) {
 			putc(fill, out);
 			csumval = csumval + fill;
@@ -962,7 +948,10 @@ byte()
 		    delim = *ip++;
 		    continue;
 		} else {
-			obj[nbytes++] = exp_() & 0xFF;
+			obj[nbytes] = exp_() & 255;
+                        if (pass == 2 & flgrel!=0 & bintype != BIN_CMD)
+                          emitref(loc+nbytes,refpart+1-(refpart!=0));
+                        nbytes++;
 		}
 		if (match(',') == 0)
 			break;
@@ -984,8 +973,7 @@ dbyte()
 		flgrel = 0;
 		word = exp_();
 		if (pass == 2 & bintype != BIN_CMD) {
-			if (flgrel)
-				outrel(loc + nbytes);
+			if (flgrel) emitref(loc+nbytes,3);
 		}
 		obj[nbytes++] = word >> 8;
 		obj[nbytes++] = word & 0xFF;
@@ -1024,23 +1012,41 @@ file()
 
 psend()
 {
-	endflag = TRUE;
+ skip();
+ if (*ip != 0 & *ip != 10 & *ip != 13 & *ip != ';') {
+   entry = exp_(); entryset = 1;
+   if (flgrel == 2 | flgrel == 3) error("Invalid entry point");
+ }
+ endflag = TRUE;
 }
 
 sect()
 {
-	locsave = loc;
-	loc = exp_();
-	nsect++;
+ int val, kind;
+ if (nsect) { error("Nested SECTION"); return; }
+ locsave = loc;
+ skip(); kind = 2;
+ if (*ip == 0 | *ip == 10 | *ip == 13 | *ip == ';') {
+   val = bssused;
+   if (pass == 2) val = val + codesize;
+ } else {
+   val = exp_();
+   if (flgunk | flgrel == 3) error("Invalid SECTION address");
+   if (flgrel == 0) kind = 0;
+ }
+ sectkind = kind; loc = val; nsect = 1;
 }
 
 ends()
 {
-	if (nsect) {
-	    loc = locsave;
-	    nsect = 0;
-	} else
-	    error("ENDS without SECTION.");
+ char *size;
+ if (nsect == 0) { error("ENDS without SECTION."); return; }
+ if (sectkind == 2) {
+   size = loc;
+   if (pass == 2) size = size - codesize;
+   if (size > bssused) bssused = size;
+ }
+ loc = locsave; nsect = 0; sectkind = 0;
 }
 
 proc()
@@ -1073,11 +1079,14 @@ global()
 	else if (pass == 1) {
 		while(i < LINESIZE) {
 			if (sym(buf)) {
-				if (hashfind(buf)) {
-					error("Redefinition of symbol");
-					break;
-				} else
-					tag = install(buf, 0);
+                                tag = rawfind(buf);
+                                if (tag) {
+                                  if ((tag[NAME]&SYMBFWD)==0) {
+                                    error("Redefinition of symbol");
+                                    break;
+                                  }
+                                  tag[NAME]=tag[NAME]&SYMBPUB;
+                                } else tag = install(buf, 0);
 
 				locsuffix(buf, nloc[nproc]);
 
@@ -1265,8 +1274,9 @@ int cnt;
 	*str = ':';
 	ptr = str + strlen(str);
 	while (cnt != 0) {
-	    *ptr++ = 32 + cnt % 96;
-	    cnt = cnt / 96;
+            /* The location suffix is an unsigned 16-bit value. */
+            *ptr++ = 32 + (((cnt >> 1) & 0x7fff) % 48) * 2 + (cnt & 1);
+            cnt = ((cnt >> 1) & 0x7fff) / 48;
 	}
 	*ptr = 0;
 }
@@ -1279,10 +1289,11 @@ int cnt;
  */
 exp_()
 {
-	if (match('/'))
-		return(exp2() >> 8);
-	else
-		return(exp2());
+ int v, hi;
+ refpart=0; hi=match('/');
+ v=exp2(); refvalue=v;
+ if (hi) { refpart=2; return (v >> 8) & 255; }
+ return v;
 }
 
 /*
@@ -1293,82 +1304,90 @@ exp_()
 
 exp2()
 {
-    int n;
-    n = exp3();
-    while (*ip) {
-	if (match('|'))
-	    n = n | exp3();
-	else
-	    break;
-    }
-    return n;
+ int n, t, e, r, op;
+ n = exp3();
+ while (*ip) {
+  t=flgrel; e=flgext; op=0;
+  if (match('|')) op='|';
+  if (op == 0) break;
+  r=exp3();
+  n=exprbin(n,t,e,r,op);
+ }
+ return n;
 }
 
 exp3()
 {
-    int n;
-    n = exp4();
-    while (*ip) {
-	if (match('^'))
-	    n = n ^ exp4();
-	else
-	    break;
-    }
-    return n;
+ int n, t, e, r, op;
+ n = exp4();
+ while (*ip) {
+  t=flgrel; e=flgext; op=0;
+  if (match('^')) op='^';
+  if (op == 0) break;
+  r=exp4();
+  n=exprbin(n,t,e,r,op);
+ }
+ return n;
 }
 
 exp4()
 {
-    int n;
-    n = exp5();
-    while (*ip) {
-	if (match('&'))
-	    n = n & exp5();
-	else
-	    break;
-    }
-    return n;
+ int n, t, e, r, op;
+ n = exp5();
+ while (*ip) {
+  t=flgrel; e=flgext; op=0;
+  if (match('&')) op='&';
+  if (op == 0) break;
+  r=exp5();
+  n=exprbin(n,t,e,r,op);
+ }
+ return n;
 }
 
 exp5()
 {
-    int n;
-    n = exp6();
-    while (*ip) {
-	if (match('+'))
-	    n = n + exp6();
-	else if (match('-'))
-	    n = n - exp6();
-	else
-	    break;
-    }
-    return n;
+ int n, t, e, r, op;
+ n = exp6();
+ while (*ip) {
+  t=flgrel; e=flgext; op=0;
+  if (match('+')) op='+';
+  else if (match('-')) op='-';
+  if (op == 0) break;
+  r=exp6();
+  n=exprbin(n,t,e,r,op);
+ }
+ return n;
 }
 
 exp6()
 {
-    int n;
-    n = exp7();
-    while (*ip) {
-	if (match('*'))
-	    n = n * exp7();
-	else if (match('/'))
-	    n = n / exp7();
-	else if (match('%'))
-	    n = n % exp7();
-	else
-	    break;
-    }
-    return n;
+ int n, t, e, r, op;
+ n = exp7();
+ while (*ip) {
+  t=flgrel; e=flgext; op=0;
+  if (match('*')) op='*';
+  else if (match('/')) op='/';
+  else if (match('%')) op='%';
+  if (op == 0) break;
+  r=exp7();
+  n=exprbin(n,t,e,r,op);
+ }
+ return n;
 }
 
 exp7()
 {
-    if (match('~'))
-	return 0xFFFF ^ exp8();
-    if (match('-'))
-	return -exp8();
-    return exp8();
+ int v, op;
+ op=0;
+ if (match('~')) op=1;
+ else if (match('-')) op=2;
+ v=exp8();
+ if (op) {
+  if (flgrel) error("Illegal relative expression");
+  if (op==1) return 65535 ^ v;
+  return -v;
+ }
+ return v;
 }
 
 exp8()
@@ -1392,6 +1411,7 @@ exp8()
 operand()
 {
 	char symbol[LINESIZE];
+        flgrel=0; flgext=0;
 
 	if (sym(symbol))
 		return(lookup(symbol));
@@ -1404,7 +1424,9 @@ operand()
 	else if (match(0x27)) /* '\'' */
 		return(character());
 	else if (match('*')) {
-		flgrel = flgrel ^ 1;
+		flgrel=1;
+                if (nsect) flgrel=sectkind;
+                else if (bintype==BIN_CMD) flgrel=0;
 		return(loc);
 	} else if (isdigit(*ip))
 		return(decimal());
@@ -1439,7 +1461,7 @@ char *name;
 		tag = hashfind(name);
 
 	if (pass == 2) {
-		if (tag == 0) {
+		if (tag == 0 | (tag[NAME] & SYMBFWD)) {
 			if (ignotdef)
 			    return 0;
 			printf("[%s] ", name);
@@ -1447,14 +1469,25 @@ char *name;
 		} else if (tag < start)
 			error("illegal symbol");
 	}
+        if (tag) {
+          if (tag[NAME]&SYMBFWD) {
+            flgrel=1; flgunk=1; return 0xEAEA;
+          }
+        }
 	if (tag == 0) {
+                flgrel=1;
+                if (bintype==BIN_CMD) flgrel=0;
 		flgunk = 1;
 		return(0xEAEA);
 	} else {
 		if (*(tag + NAME) & SYMBCAL)
 			flgunk = 1;
-		else if (*(tag + NAME) & SYMBLBL)
-			flgrel = flgrel ^ 1;
+		else if (tag[NAME] & SYMBEXT) {
+                  flgrel=3; flgext=mgetw(tag+VALUE); return 0;
+                } else if (tag[NAME] & SYMBLBL) {
+                  flgrel=1;
+                  if (tag[NAME] & SYMBBSS) flgrel=2;
+                }
 		return(mgetw(tag + VALUE));
 	}
 }
@@ -1499,16 +1532,16 @@ char c;
  */
 decimal()
 {
-	int n;
-
-	if (isdigit(*ip) == 0)
-		return(ERROR);
-	else {
-		n = 0;
-		while (isdigit(*ip))
-			n = n * 10 + *ip++ - '0';
-		return(n);
-	}
+ int n,c,d;
+ n=0;
+ while (isxdigit(*ip)) {
+  c=toupper(*ip++);
+  if (c>='0' & c<='9') d=c-'0';
+  else d=c-'A'+10;
+  if (d>=radix) error("Digit outside RADIX");
+  n=n*radix+d;
+ }
+ return n;
 }
 
 /*
@@ -1761,11 +1794,11 @@ int stat;				/* exit status */
 	    fclose(in[incnt--]);
 	}
 
-	fclose(in[0]);
+	if (in[0]) fclose(in[0]);
 
 	if (out != NULL)
 		fclose(out);
-	if (outpgm != NULL);
+	if (outpgm != NULL)
 		fclose(outpgm);
 	if (outlst > 2)
 		fclose(outlst);
@@ -1802,39 +1835,59 @@ char *name;
 	return(h);
 }
 
-installop(name, val)
+installop(name,val)
 char *name;
 int val;
 {
-	*name = 0x7F ^ *name;
-	install(name, val);
-	*name = 0x7F ^ *name;
+ int i;
+ if (opcount==192) fatal(-1);
+ i=opcount++;
+ while (i>0) {
+  if (strcmp(opnames[i-1],name)<=0) break;
+  opnames[i]=opnames[i-1]; opvals[i]=opvals[i-1]; i--;
+ }
+ opnames[i]=name; opvals[i]=val;
 }
 
 /*
  * install new symbol
  */
-install(name, val)
+install(name,val)
 char *name;
 int val;
 {
-	int len, h;
-	char *p;
-
-	len = strlen(name) + 6;
-	if (freeptr + len > endsym) {
-		printf("symbol table full\n");
-		fatal(-1);
-	}
-	h = hash(name);
-	p = freeptr;
-	mputw(p + NEXTPTR, hashtab[h]);
-	hashtab[h] = p;
-	mputw(p + VALUE, val);
-	p[NAME] = 0;
-	strcpy(p + NAME + 1, name);
-	freeptr = p + len;
-	return p;
+ int len,h,k,i,j,stem;
+ char *p,*q;
+ stem=0; k=-1;
+ while (name[stem]!=0 & name[stem]!='_' & stem<15) stem++;
+ if (name[stem]=='_' & stem>1 & stem<15) {
+  stem++;
+  i=0;
+  while (i<precnt & k<0) {
+   q=pretbl[i]; j=0;
+   while (j<stem & q[j]==name[j]) j++;
+   if (j==stem & q[j]==0) k=i;
+   i++;
+  }
+  if (k<0 & precnt<32 & preused+stem+1<192) {
+   k=precnt++; q=prepool+preused; pretbl[k]=q;
+   i=0; while (i<stem) { q[i]=name[i]; i++; }
+   q[i]=0; preused=preused+stem+1;
+  }
+ }
+ len=strlen(name)+6;
+ if (k>=0) len=len-stem+1;
+ if (freeptr+len>endsym) {
+  printf("symbol table full\n");
+  fatal(-1);
+ }
+ h=hash(name); p=freeptr;
+ mputw(p+NEXTPTR,hashtab[h]); hashtab[h]=p;
+ mputw(p+VALUE,val); p[NAME]=0;
+ if (k>=0) {
+  p[NAME+1]=k+1; strcpy(p+NAME+2,name+stem);
+ } else strcpy(p+NAME+1,name);
+ freeptr=p+len; return p;
 }
 
 /*
@@ -1847,7 +1900,7 @@ char *name;
 
 	tag = hashtab[hash(name)];
 	while (tag) {
-		if (strcmp(tag + NAME + 1, name) == SAME) {
+		if (tagcmp(tag,name) == SAME) {
 			if (*(tag + NAME) & SYMBLNK)
 				tag = mgetw(tag + VALUE);
 			break;
@@ -1884,39 +1937,17 @@ int *p;
  */
 dumpsym()
 {
-	char *p;
-	char *r;
-	char c;
-	int val;
-	FILE *out;
-
-	if (freeptr == start)
-		return;
-
-	p = start;
-	while (p < freeptr) {
-		if (((*p) & 0xFF) == 0xFF) {
-printf("skip [%s]\n", p + 1);
-		    p = p + strlen(p + 1) + 2;
-		    continue;
-		}
-		if (*(p + NAME + 1) != ':') {
-			if (*(p + NAME) & SYMBLNK)
-				r = mgetw(p + VALUE);
-			else
-				r = p;
-			val = mgetw(r + VALUE);
-			if (val == 0)
-				fprintf(outlst, "Orphaned global symbol %s\n", p + NAME + 1);
-			else {
-				if (*(p + NAME) == SYMBCAL)
-					fprintf(outlst, "%s=[%s]\n", p + NAME + 1, val);
-				else
-					fprintf(outlst, "%s =$%04x\n", p + NAME + 1, val);
-			}
-		}
-		p = p + strlen(p + NAME + 1) + 6;
-	}
+ char *p,*q;
+ p=start;
+ while (p<freeptr) {
+  tagname(p);
+  if (*sbuf!=':') {
+   q=p;
+   if (p[NAME]&SYMBLNK) q=mgetw(p+VALUE);
+   fprintf(outlst,"%s =$%04x\n",sbuf,mgetw(q+VALUE));
+  }
+  p=p+strlen(p+NAME+1)+6;
+ }
 }
 
 /*
@@ -1937,24 +1968,7 @@ isxdigit(c) char c;
  * utoi -- convert unsigned decimal string to integer nbr
  *	        returns field size, else ERR on error
  */
-utoi(decstr, nbr)
-char *decstr ;
-int *nbr;
-{
-	int t, d ;
 
-	d = 0 ;
-	*nbr = 0 ;
-	while ( *decstr >= '0' & *decstr <= '9' ) {
-		t = *nbr ;
-		t = (10*t) + (*decstr++ - '0') ;
-		if ( t >= 0 & *nbr < 0 )
-			return -1 ;
-		++d ;
-		*nbr = t ;
-	}
-	return d ;
-}
 
 /*
  * itod -- convert nbr to signed decimal string of width sz
@@ -1964,38 +1978,7 @@ int *nbr;
  *	      if sz  =  0 find end of string
  *	      if sz < 0 use last byte for data
  */
-itod(nbr, str, sz)
-int nbr ;
-char str[] ;
-int sz ;
-{
-	char sgn ;
 
-	if ( nbr < 0 ) {
-		nbr = -nbr ;
-		sgn = '-' ;
-	}
-	else
-		sgn = ' ' ;
-	if ( sz > 0 )
-		str[--sz] = NULL ;
-	else if ( sz < 0 )
-			sz = -sz ;
-		else
-			while ( str[sz] != NULL )
-				++sz ;
-	while ( sz ) {
-		str[--sz] = nbr % 10 + '0' ;
-		nbr = nbr / 10;
-		if ( nbr == 0 )
-			break ;
-	}
-	if ( sz )
-		str[--sz] = sgn ;
-	while ( sz > 0 )
-		str[--sz] = ' ' ;
-	return str ;
-}
 
 
 /*
@@ -2006,32 +1989,7 @@ int sz ;
  *	      if sz  =  0 find end of string
  *	      if sz < 0 use last byte for data
  */
-itou(nbr, str, sz)
-int nbr ;
-char str[] ;
-int sz ;
-{
-	int lowbit ;
 
-	if ( sz > 0 )
-		str[--sz] = NULL ;
-	else if ( sz < 0 )
-			sz = -sz ;
-		else
-			while ( str[sz] != NULL )
-				++sz ;
-	while ( sz ) {
-		lowbit = nbr & 1 ;
-		nbr = (nbr >> 1) & 0x7fff ;  /* divide by 2 */
-		str[--sz] = ( (nbr%5) << 1 ) + lowbit + '0' ;
-		nbr = nbr / 5;
-		if ( nbr == 0 )
-			break ;
-	}
-	while ( sz )
-		str[--sz] = ' ' ;
-	return str ;
-}
 
 
 /*
@@ -2042,35 +2000,7 @@ int sz ;
  *	      if sz  =  0 find end of string
  *	      if sz < 0 use last byte for data
  */
-itox(nbr, str, sz)
-int nbr ;
-char str[] ;
-int sz ;
-{
-	int digit, offset ;
 
-	if ( sz > 0 )
-		str[--sz] = NULL ;
-	else if ( sz < 0 )
-		sz = -sz ;
-	else
-		while ( str[sz] != NULL )
-			++sz ;
-	while ( sz ) {
-		digit = nbr & 15 ;
-		nbr = ( nbr >> 4 ) & 0xfff ;
-		if ( digit < 10 )
-			offset = 48 ;
-		else
-			offset = 55 ;
-		str[--sz] = digit + offset ;
-		if ( nbr == 0 )
-			break ;
-	}
-	while ( sz )
-		str[--sz] = ' ' ;
-	return str ;
-}
 
 /*
 ** printf(controlstring, arg, arg, ...) -- formatted print
@@ -2103,50 +2033,35 @@ int argc;
 	return _printf(fd, nxtarg);
 }
 
-_printf(fd, nxtarg)
-int fd;
-int *nxtarg;
+_printf(fd,args)
+int fd,*args;
 {
-	int  width, prec, preclen, len;
-	char *ctl, *cx, c, right, str[7], *sptr, pad;
-	int i;
-
-	ctl = *nxtarg;
-	while(c=*ctl++) {
-		if (c==0x5c) {
-			c=*ctl++;
-			if (c == 'n') {cout(10, fd); continue;}
-			if (c == 'r') {cout(13, fd); continue;}
-			if (c == 't') {cout(9, fd); continue;}
-			cout(c, fd);
-			continue;
-		}
-		if(c!='%') {cout(c, fd); continue;}
-		if(*ctl=='%') {cout(*ctl++, fd); continue;}
-		cx=ctl;
-		if(*cx=='-') {right=0; ++cx;} else right=1;
-		if(*cx=='0') {pad='0'; ++cx;} else pad=' ';
-		if((i=utoi(cx, &width)) >= 0) cx=cx+i; else continue;
-		if(*cx=='.') {
-			if((preclen=utoi(++cx, &prec)) >= 0) cx=cx+preclen;
-			else continue;
-		} else preclen=0;
-		sptr=str; c=*cx++; i=*(--nxtarg);
-		if(c=='d') itod(i, str, 7);
-		else if(c=='x') itox(i, str, 7);
-		else if(c=='c') {str[0]=i; str[1]=NULL;}
-		else if(c=='s') sptr=i;
-		else if(c=='u') itou(i, str, 7);
-		else continue;
-		ctl=cx; /* accept conversion spec */
-		if(c!='s') while(*sptr==' ') ++sptr;
-		len=-1; while(sptr[++len]); /* get length */
-		if((c=='s')&(len>prec)&(preclen>0)) len=prec;
-		if(right) while(((width--)-len)>0) cout(pad, fd);
-		while(len) {cout(*sptr++, fd); --len; --width;}
-		while(((width--)-len)>0) cout(pad, fd);
-	}
-	return 0;
+ char *ctl,*p,c,pad;
+ int w,num;
+ ctl=*args;
+ while (c=*ctl++) {
+  if (c==92) {
+   c=*ctl++;
+   if (c=='n') c=10;
+   if (c=='r') c=13;
+   if (c=='t') c=9;
+   cout(c,fd);
+  } else if (c!='%') cout(c,fd);
+  else if (*ctl=='%') { ctl++; cout('%',fd); }
+  else {
+   w=0; pad=' ';
+   if (*ctl=='0') pad='0';
+   while (*ctl>='0' & *ctl<='9') w=w*10+*ctl++-'0';
+   c=*ctl++; num=*--args;
+   if (c=='s') { p=num; while (*p) cout(*p++,fd); }
+   else if (c=='c') cout(num,fd);
+   else {
+    if (c=='d' & num<0) { cout('-',fd); num=-num; w--; }
+    fmtnum(fd,num,c,w,pad);
+   }
+  }
+ }
+ return 0;
 }
 
 cout(c, fd) char c; int fd; {
@@ -2158,3 +2073,80 @@ cout(c, fd) char c; int fd; {
 }
 
 #include OPCODES.ASM
+
+/* Assembler expressions are unsigned 16-bit words, independently of C int. */
+udiv16(a, b, rem)
+int a, b, rem;
+{
+ int q, r, bits, carry;
+ if (b == 0) { error("division by zero"); return 0; }
+ q=0; r=0; bits=16;
+ while (bits) {
+  carry=r&0x8000;
+  r=(r<<1)|((a>>15)&1);
+  a=a<<1; q=q<<1;
+  if (carry | ((r^0x8000)>=(b^0x8000))) { r=r-b; q=q|1; }
+  bits=bits-1;
+ }
+ if (rem) return r;
+ return q;
+}
+
+#include OBJIO.C
+
+fmtnum(fd,num,fmt,w,pad)
+int fd,num,fmt,w,pad;
+{
+ char b[7];
+ int n,d,lo;
+ n=0;
+ while (1) {
+  if (fmt=='x') { d=num&15; num=(num>>4)&4095; }
+  else {
+   lo=num&1; num=(num>>1)&32767;
+   d=(num%5)*2+lo; num=num/5;
+  }
+  if (d<10) b[n++]=d+'0';
+  else b[n++]=d+'a'-10;
+  if (num==0) break;
+ }
+ while (w-->n) cout(pad,fd);
+ while (n) cout(b[--n],fd);
+}
+
+tagcmp(p,name)
+char *p,*name;
+{
+ char *q;
+ int c;
+ p=p+NAME+1; c=*p;
+ if (c>0 & c<=32) {
+  q=pretbl[c-1]; p++;
+  while (*q) { if (*q++!=*name++) return 1; }
+ }
+ return strcmp(p,name);
+}
+
+tagname(p)
+char *p;
+{
+ int c;
+ p=p+NAME+1; c=*p;
+ *sbuf=0;
+ if (c>0 & c<=32) { strcpy(sbuf,pretbl[c-1]); p++; }
+ strcat(sbuf,p);
+}
+
+findop(name)
+char *name;
+{
+ int lo,hi,mid,cmp;
+ lo=0; hi=opcount-1;
+ while (lo<=hi) {
+  mid=(lo+hi)/2; cmp=strcmp(name,opnames[mid]);
+  if (cmp==0) return &opvals[mid];
+  if (cmp<0) hi=mid-1;
+  else lo=mid+1;
+ }
+ return 0;
+}
