@@ -84,6 +84,9 @@ int argc,*argv[];
   if (selected[i]&1) patchmod(i,code,out);
   i++;
  }
+ /* UniDOS keeps a dirty sector after a final random patch. Publish it
+  * before switching the update stream from writes to sequential reads. */
+ if (fflush(code)) die("Code flush error");
  seekabs(code,0,0); copyblk(code,out,textlen);
  ioclose(code); unlink(codefile);
  if (cmdmode==0) {
