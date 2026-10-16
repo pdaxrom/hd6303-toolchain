@@ -63,6 +63,17 @@ with tempfile.TemporaryDirectory(prefix='unild-') as tmp:
     bssmap = (work/'BSS.MAP').read_text()
     assert 'M BONLY 0 0 5 7' in bssmap
     assert 'S BUFFER 5' in bssmap and 'S BOUNDARY 12' in bssmap
+    run('unild','-z','256','-m','PAD.MAP','-o','PAD.PGM','BROOT.OBJ','BONLY.OBJ')
+    padded, extent, entry, rels = pgm(work/'PAD.PGM')
+    assert len(padded)==256 and extent==7 and entry==0
+    assert padded[:5]==bytes.fromhex('ce01003f38') and padded[5:]==bytes(251)
+    assert rels==[1] and 'S BUFFER 256' in (work/'PAD.MAP').read_text()
+    for bad in ('0','4','65536','99999','-1','12x'):
+        run('unild','-z',bad,'-o','PAD.PGM','BROOT.OBJ','BONLY.OBJ',ok=False)
+    assert pgm(work/'PAD.PGM')[0]==padded
+    run('unild','-p','-z','255','-o','PAD.PGM','BROOT.OBJ','BONLY.OBJ',ok=False)
+    run('unild','-b','-z','256','-o','PAD.PGM','APP.PGM','APP.PGM',ok=False)
+    assert pgm(work/'PAD.PGM')[0]==padded
     for lib in ('ORIG.LIB','TEST.LIB'):
         run('unild','-o','LIB.PGM','MAIN.OBJ',lib)
         assert (work/'LIB.PGM').read_bytes()==(work/'APP.PGM').read_bytes()

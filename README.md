@@ -167,6 +167,12 @@ paths, and 65535 bytes per OBJ or combined program memory. Library file
 positions are 32-bit, so a LIB can exceed 64 KiB. CMD does not allocate BSS;
 the application must check and reserve its own data memory.
 
+`-z BYTES` zero-pads code to an exact decimal extent before placing BSS.
+It rejects a smaller extent, overflow, and non-page-aligned values with `/p`.
+This permits interchangeable standard PGM overlays with identical BSS
+addresses; neither OBJ nor PGM gains a new record type. `-b` can package
+several such PGMs after a resident supervisor. Existing commands are unchanged.
+
 `-m APP.MAP` writes a textual link map (module code/BSS ranges and public
 symbols). It is optional metadata and does not change the PGM. BSS-only
 modules are included. `-b -o COMBINED.PGM PREFIX.PGM CHILD.PGM` concatenates

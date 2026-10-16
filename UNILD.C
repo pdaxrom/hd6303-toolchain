@@ -6,7 +6,7 @@ char paths[1024], members[2048], globals[10752];
 char mf[256], mpub[256], mext[256], selected[256], walked[256];
 int mh[256], ml[256], mlen[256], mc[256], md[256], mo[256];
 int me[256], mg[256], cb[256], db[256], cache[255];
-int nfiles,nmods,nglobal,rootmod,cmdmode,pageflag,bundlemode;
+int nfiles,nmods,nglobal,rootmod,cmdmode,pageflag,bundlemode,codeextent;
 char mapfile[32], maptmp[32];
 int textlen,datalen,changed,rtype,rvalue,roff,relcount;
 char outfile[32], codefile[32], finaltmp[32], inputnm[32];
@@ -29,6 +29,16 @@ int argc,*argv[];
   } else if (strcmp(p,"-m")==0) {
    if (i==argc) die("Missing map path");
    pathcpy(mapfile,argv[i++]);
+  } else if (strcmp(p,"-z")==0) {
+   if (i==argc) die("Missing code extent");
+   p=argv[i++];
+   if (*p==0 | codeextent) die("Invalid code extent");
+   while (*p) {
+    if (*p<'0' | *p>'9') die("Invalid code extent");
+    if (ult(6553,codeextent)) die("Code extent overflow");
+    codeextent=add16(codeextent*10,*p++-'0');
+   }
+   if (codeextent==0) die("Invalid code extent");
   } else if (*p=='/' | *p=='-') {
    p++;
    if (*p==0) die("Empty option");
@@ -43,7 +53,7 @@ int argc,*argv[];
   else addinput(p);
  }
  if (bundlemode) { bundlepgm(); exit(0); }
- if (nmods==0) die("unild [/c] [/p] [-m map] [-o output] objects/libs");
+ if (nmods==0) die("unild [/c] [/p] [-z bytes] [-m map] [-o out] objs/libs");
  if (rootmod<0) die("No entry point");
  selected[rootmod]=1;
  changed=1;
@@ -351,6 +361,13 @@ layout()
   }
   i++;
  }
+ /* Fixed code extents give standard PGM overlays the same BSS base.
+  * Padding is ordinary zero code; OBJ/PGM formats stay intact. */
+ if (codeextent) {
+  if (pageflag & (codeextent&255)!=0) die("Code extent not page aligned");
+  if (ult(codeextent,textlen)) die("Code exceeds requested extent");
+  textlen=codeextent;
+ }
  add16(textlen,datalen);
 }
 
@@ -434,7 +451,8 @@ bundlepgm()
 {
  int i,f,out,hi,lo,n,offset,code,rel,previous,at;
  if (nfiles<2 | *outfile==0) die("unild -b -o output pgms");
- if (cmdmode | pageflag | *mapfile) die("Bundle options conflict");
+ if (cmdmode | pageflag | codeextent | *mapfile)
+  die("Bundle options conflict");
  tmpname(finaltmp,outfile,'L'); cleanup(finaltmp);
  out=ioopen(finaltmp,"w+"); i=0;
  while (i<nfiles) {
