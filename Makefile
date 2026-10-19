@@ -13,7 +13,7 @@ SMALLCX.CMD: scvm SMALL-C/SMALLCX.C BOOTSTRAP/SMALLC.CMD BOOTSTRAP/AS03.CMD
 	$(VM) BOOTSTRAP/SMALLC.CMD -o SMALLCX.ASM SMALL-C/SMALLCX.C
 	$(VM) BOOTSTRAP/AS03.CMD -o SMALLCX.CMD SMALLCX.ASM
 
-AS03X.CMD: scvm AS03/AS03.C AS03/OBJIO.C SMALLCX.CMD
+AS03X.CMD: scvm AS03/AS03.C AS03/OBJIO.C AS03/HC11.C AS03/OPCODES.ASM SMALLCX.CMD
 	cd AS03 && ../$(VM) ../SMALLCX.CMD -o ../AS03X.ASM AS03.C
 	$(VM) BOOTSTRAP/AS03.CMD -o AS03X.CMD AS03X.ASM
 
@@ -21,7 +21,7 @@ SMALLC.CMD: scvm SMALL-C/SMALLCX.C SMALLCX.CMD AS03X.CMD
 	$(VM) SMALLCX.CMD -o SMALLC.ASM SMALL-C/SMALLCX.C
 	$(VM) AS03X.CMD -o SMALLC.CMD SMALLC.ASM
 
-AS03.ASM: scvm AS03/AS03.C AS03/OBJIO.C SMALLC.CMD
+AS03.ASM: scvm AS03/AS03.C AS03/OBJIO.C AS03/HC11.C AS03/OPCODES.ASM SMALLC.CMD
 	cd AS03 && ../$(VM) ../SMALLC.CMD -o ../AS03.ASM AS03.C
 
 AS03.CMD: AS03.ASM AS03X.CMD
@@ -61,12 +61,16 @@ clean:
 
 # FPGA target: a common Small-C ABI, selected at load time by RAMLOAD /CVM.
 .PHONY: pyldin
-pyldin: unias unicc pyldin/ZVM6303.ROM pyldin/ZVM6800.ROM pyldin/UNIAS.CMD pyldin/UNICC.CMD pyldin/UNILD.CMD pyldin/UNIAR.CMD pyldin/SYSTEM.H pyldin/CSTART.OBJ pyldin/CRT.LIB pyldin/CVMDEF.INC pyldin/CVMABI.INC
+pyldin: unias unicc pyldin/ZVMHC11.ROM pyldin/ZVM6303.ROM pyldin/ZVM6800.ROM pyldin/UNIAS.CMD pyldin/UNICC.CMD pyldin/UNILD.CMD pyldin/UNIAR.CMD pyldin/SYSTEM.H pyldin/CSTART.OBJ pyldin/CRT.LIB pyldin/CVMDEF.INC pyldin/CVMABI.INC
 
 
 pyldin/ZVM6303.ROM: ZCODE.ASM unias
 	mkdir -p pyldin
 	./unias -D PYLDIN601 -l pyldin/ZVM6303.LST -o $@ ZCODE.ASM
+
+pyldin/ZVMHC11.ROM: ZCODE.ASM HC11DIV.INC unias
+	mkdir -p pyldin
+	./unias -m hc11 -D PYLDIN601 -l pyldin/ZVMHC11.LST -o $@ ZCODE.ASM
 
 pyldin/ZVM6800.ROM: ZCODE.ASM unias
 	mkdir -p pyldin
@@ -95,6 +99,11 @@ test: scvm unicc unias unild uniar runtime
 	./test-scvm
 	python3 tests/test_objects.py
 	python3 tests/test_cmodules.py
+	python3 tests/test_hc11.py
+
+.PHONY: test-hc11
+test-hc11: unias unild uniar
+	python3 tests/test_hc11.py
 
 # Linker and librarian are compiled with the same Small-C VM as UniAS.
 UNILD.ASM: UNILD.C TOOLIO.C unicc

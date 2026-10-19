@@ -148,6 +148,26 @@ memtabl
 	DB	"BSET", 10
 	DB	"BTGL", 10
 	DB	"BTST", 10
+	DB	"ABY", 10
+	DB	"CPD", 10
+	DB	"CMPD", 10
+	DB	"CPY", 10
+	DB	"CMPY", 10
+	DB	"CMPX", 10
+	DB	"DEY", 10
+	DB	"FDIV", 10
+	DB	"IDIV", 10
+	DB	"INY", 10
+	DB	"LDY", 10
+	DB	"PSHY", 10
+	DB	"PULY", 10
+	DB	"STOP", 10
+	DB	"STY", 10
+	DB	"TSY", 10
+	DB	"TYS", 10
+	DB	"XGDY", 10
+	DB	"BRSET", 10
+	DB	"BRCLR", 10
 	DB	0
 opcodes
 	DB	$00, $1B, $00, $00, $00, $00, $00	;ABA
@@ -297,5 +317,27 @@ opcodes
 	DB	$C0, $00, $00, $72, $00, $62, $00	;BSET
 	DB	$C0, $00, $00, $75, $00, $65, $00	;BTGL
 	DB	$C0, $00, $00, $7B, $00, $6B, $00	;BTST
+	; HC11 flags: 02=HC11 only, 04=page 2 inherent, 08=CPD pages,
+	; 10=Y register, 20=bit-test branch, 01=word immediate.
+	DB	$06, $3A, $00, $00, $00, $00, $00	;ABY
+	DB	$0B, $00, $83, $93, $B3, $A3, $00	;CPD
+	DB	$0B, $00, $83, $93, $B3, $A3, $00	;CMPD
+	DB	$13, $00, $8C, $9C, $BC, $AC, $00	;CPY
+	DB	$13, $00, $8C, $9C, $BC, $AC, $00	;CMPY
+	DB	$03, $00, $8C, $9C, $BC, $AC, $00	;CMPX
+	DB	$06, $09, $00, $00, $00, $00, $00	;DEY
+	DB	$02, $03, $00, $00, $00, $00, $00	;FDIV
+	DB	$02, $02, $00, $00, $00, $00, $00	;IDIV
+	DB	$06, $08, $00, $00, $00, $00, $00	;INY
+	DB	$13, $00, $CE, $DE, $FE, $EE, $00	;LDY
+	DB	$06, $3C, $00, $00, $00, $00, $00	;PSHY
+	DB	$06, $38, $00, $00, $00, $00, $00	;PULY
+	DB	$02, $CF, $00, $00, $00, $00, $00	;STOP
+	DB	$12, $00, $00, $DF, $FF, $EF, $00	;STY
+	DB	$06, $30, $00, $00, $00, $00, $00	;TSY
+	DB	$06, $35, $00, $00, $00, $00, $00	;TYS
+	DB	$06, $8F, $00, $00, $00, $00, $00	;XGDY
+	DB	$22, $00, $00, $12, $00, $1E, $00	;BRSET
+	DB	$22, $00, $00, $13, $00, $1F, $00	;BRCLR
 
 #endasm

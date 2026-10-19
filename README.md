@@ -1,12 +1,12 @@
 # hd6303-toolchain
 
-Native UniDOS and cross compilers for assembler and Small-C for CPU HD6303.
+Native UniDOS and cross tools for MC6800/HD6303, with MC68HC11 assembly support.
 
 Assembler is based on [MOS Technology 6502 assembler for BBC Micro](http://mdfs.net/System/C/BBC/Small-C/v073/source/as65.c) by A.J.Travis and J.G.Harston
 
 Small-C is based on [Ron Cain's Small-C V1.1](https://en.wikipedia.org/wiki/Small-C) adapted for Flex by S. Stepanoff
 
-## UniAS HD6303 Assembler for UniDOS
+## UniAS HD6303/MC68HC11 Assembler for UniDOS
 
 The original assemblers do not support HD6303 extended commands. In addition, they cannot assemble the source 
 texts of system programs without cross-compiling, due to lack of memory. In this regard, it was decided to write
@@ -14,8 +14,37 @@ a new assembler that is compatible with [UniCROSS](https://pyldin.info/document/
 
 **Usage:**
 ```
-unias [-c] [-D IDENT] [-l [prog.lst]] [-o prog[.cmd|.pgm|.obj]] prog.asm
+unias [-m hd6303|hc11] [-c] [-D IDENT] [-l [prog.lst]] [-o prog[.cmd|.pgm|.obj]] prog.asm
 ```
+
+HD6303 remains the default. `-m hc11` selects MC68HC11 and defines
+`__HC11__`. Aliases `68hc11` and `MC68HC11` are accepted. CMD, PGM and
+separate OBJ/LIB modules use the existing formats and relocation machinery.
+Select HC11 consistently for every module containing HC11 instructions;
+the linker does not translate one instruction set into another.
+
+HC11 supports Y addressing, prefix pages 18/1A/CD, CPD/CPY, IDIV/FDIV,
+STOP and bit operations. Examples:
+
+```asm
+    ldy #buffer
+    ldaa 7,y
+    cpd #$1234
+    bset $80,#$40
+    bclr 5,y,#1
+    brset 0,y,#$80,ready
+```
+
+Offsets for indexed X/Y addressing and masks must be absolute 0..255.
+Bit syntax is address (optionally followed by X/Y), mask, then branch target;
+`#` before the mask is optional. HC11 rejects HD6303-only AIM/OIM/EIM/TIM
+and SLP. XGDX is 8F in HC11 and 18 in HD6303. TEST/factory MCU modes and
+on-chip peripherals are outside the Pyldin CPU extension.
+
+`make test-hc11` compares 101 forms against fixed manual-derived opcode
+bytes, checks invalid operands and verifies relocation after all prefix
+pages, including BSS, CMD/PGM, OBJ and LIB linking. `make test` retains the
+existing HD6303/MC6800 regressions. Native UniAS uses the same encoder.
 
 **Where:**
 ```
@@ -104,17 +133,20 @@ make test
 make pyldin
 ```
 
-`make pyldin` creates two 8192-byte ROM modules, ZVM6303.ROM and ZVM6800.ROM,
+`make pyldin` creates three 8192-byte ROM modules: ZVM6800.ROM, ZVM6303.ROM
+and ZVMHC11.ROM,
 plus native UNICC.CMD, UNIAS.CMD and SYSTEM.H in `pyldin/`. These use INT EF,
-ABI 1: A=0 returns A=1, B=0/1 (MC6800/HD6303), X=5A56; A=1 executes the
+ABI 1: A=0 returns A=1, B=0/1/2 (MC6800/HD6303/MC68HC11), X=5A56; A=1 executes the
 bytecode at X and returns through the normal ramloader SWI gateway. The
 Lilith/default SYSTEM.H and ZCODE.ROM retain INT E8. FPGA startup is selected
 by `-D PYLDIN601`; the distributed pyldin/SYSTEM.H enables it by default.
 
-Copy both ROMs and RAMLOAD.PGM from pyldin601-fpga to one directory. Run
+Copy all three ROMs and RAMLOAD.PGM/RAMLOAD.H11 from pyldin601-fpga to one directory. Run
 `RAMLOAD /CVM` from the main UniDOS shell before NC. It reads the FPGA CPU
 selection and installs only the matching ROM in a pinned RAMMAN bank.
 No FPGA rebuild or additional fixed ROM page is required.
+The HC11 interpreter uses IDIV for signed C division/remainder after sign
+normalization. C bytecode remains shared; native inserts require the selected ISA.
 
 C bytecode and the C104..C18C library entry table are shared between CPUs.
 The MC6800 variant uses no HD6303 extensions. VM state, original direct page
@@ -242,7 +274,7 @@ C-visible native wrappers begin with `DB 86` and return using `JMP RTSC`.
 The new FPGA INT EF A=2 / native `cvcall` entry accepts a function/argument
 pointer descriptor and returns a 16-bit result, with no argc/argv setup.
 It preserves the parent VM context for recursive C/native/C callbacks.
-Both CPU ROMs keep the existing query/program-entry ABI and VM scratch
+All three CPU ROMs keep the existing query/program-entry ABI and VM scratch
 layout. Old Lilith E8 entry remains supported. The host VM loads linked
 PGMs but still rejects arbitrary machine-code inserts; mixed execution is
 verified on the FPGA project's CPU harness.
@@ -258,7 +290,7 @@ library case. Its existing documented defects are not hidden.
 
 The FPGA UNIAS.CMD reserves 13000 bytes of conventional symbol storage.
 Its overflow pool uses the unused CC10..DEFF range in the same pinned VM
-bank (4848 bytes); it does not allocate another RAMMAN bank. Both CPU ROMs
+bank (4848 bytes); it does not allocate another RAMMAN bank. All three CPU ROMs
 advertise this writable scratch area with a VW/version-1 descriptor at CC00.
 The interpreter rejects a build that would overlap the descriptor.
 The arena is temporary, shared by invocations, and is not preserved across
@@ -267,7 +299,7 @@ nested VM applications. UniAS does not invoke child C applications.
 Host and default/Lilith UniAS retain 16200 bytes in conventional RAM. The
 EPROM target does not advertise writable ROM storage. Older FPGA VM ROMs
 remain usable for smaller assemblies with the 13000-byte main pool; update
-both FPGA ROM files and reload/reset the resident VM for large assemblies.
+all three FPGA ROM files and reload/reset the resident VM for large assemblies.
 The symbol walks, PUBLIC/EXTERN output and BSS rebasing handle both pools.
 
 The FPGA HG regression mounts the real resident HG.PGM against the C host

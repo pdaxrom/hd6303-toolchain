@@ -1,4 +1,4 @@
-/* as03.c  - MC6801/HD6303 assembler */
+/* as03.c  - MC6801/HD6303 and MC68HC11 assembler */
 /* 10-Feb-2019  v0.1  - A.Chukov     */
 
 /* as65.c  -  MOS Technology 6502 assembler */
@@ -81,7 +81,8 @@ char sbuf[LINESIZE];			/* symbol buffer */
 char prepool[192];
 int pretbl[32];
 int precnt, preused;
-int opnames[192], opvals[192], opcount;
+int opnames[224], opvals[224], opcount;
+int cpu_hc11, hc_index;
 char *symmore,*symend2,*symsplit;
 int symcap,symused;
 char symtab[SYMSIZE];			/* symbol table */
@@ -149,6 +150,7 @@ char rfile[40];
 
 int ifdefcnt;				/* ifdef stack counter */
 char ifdefstk[IFDEFSIZE];		/* ifdef stack */
+int incifbase[INCFISIZE];        /* condition depth at each include entry */
 char ignotdef;				/* undefined symbol return 0 */
 
 main(argc, argv)
@@ -170,7 +172,7 @@ int *argv[];
         entry = -1;
 	outpgm = NULL;
 
-	printf("HD6303 Assembler v1.1\n");
+	printf("UniAS HD6303/MC68HC11 Assembler v1.2\n");
 
 	if (argc < 2)
 		usage();
@@ -211,6 +213,10 @@ int *argv[];
 				--argc;
 				argv++;
 			} */
+		} else if (strcmp(argv[0], "-m") == SAME) {
+                        if (argc < 2) usage();
+                        hc_mode(argv[1]);
+                        --argc; argv++;
 		} else if (strcmp(argv[0], "-c") == SAME) {
                         makeobj = 1;
                 } else if (strcmp(argv[0], "-l") == SAME) {
@@ -238,6 +244,10 @@ int *argv[];
 
 	if (argc == 0)
 		usage();
+        if (cpu_hc11) {
+          tag=install("__HC11__",1);
+          tag[NAME]=tag[NAME]|SYMBDEF;
+        }
 
 	ifile = argv[0];
         if (ofile) {
@@ -262,6 +272,7 @@ int *argv[];
 	while(pass < 3) {
 		incnt = 0;
 		ifdefcnt = 0;
+                incifbase[0] = 0;
 		ignotdef = 0;
 		nsect = 0;
                 sectkind = 0; bssused = 0; radix = 10;
@@ -352,7 +363,8 @@ char *ext;
  */
 usage()
 {
-	printf("unias [-c] [-D ident] [-l list] [-o output] file\n");
+	printf("unias [-m hd6303|hc11] [-c] [-D ident]\n");
+        printf("      [-l list] [-o output] file\n");
 	fatal(-1);
 }
 
@@ -366,9 +378,9 @@ doasm()
 	*ibuf = 0;
 	while (1) {
 		if (inline_() == NULL) {
-		    if (ifdefcnt != 0) {
+		    if (ifdefcnt != incifbase[incnt]) {
 				warning("Non paired condition directives.");
-				ifdefcnt = 0;
+				ifdefcnt = incifbase[incnt];
 		    }
 		    if (incnt > 0) {
 			fclose(in[incnt--]);
@@ -718,6 +730,11 @@ char *tag;
 		return;
 	}
 
+	if (cpu_hc11) { hc_mnem(p); return; }
+        if (p[OPFLAG]&2) {
+          error("MC68HC11 instruction requires -m hc11"); return;
+        }
+
 	if ((obj[0] = p[INHERIT]) != ILLEGAL) {
 		nbytes = 1;
 		return;
@@ -1019,7 +1036,7 @@ file()
 		printf("unias: Cannot open %s\n", sbuf);
 		fatal(-1);
 	}
-
+	incifbase[incnt] = ifdefcnt;
 	linecnt[incnt] = 0;
 }
 
@@ -1853,7 +1870,7 @@ char *name;
 int val;
 {
  int i;
- if (opcount==192) fatal(-1);
+ if (opcount==224) fatal(-1);
  i=opcount++;
  while (i>0) {
   if (strcmp(opnames[i-1],name)<=0) break;
@@ -2090,6 +2107,7 @@ cout(c, fd) char c; int fd; {
 		putc(c, fd);
 }
 
+#include HC11.C
 #include OPCODES.ASM
 
 /* Assembler expressions are unsigned 16-bit words, independently of C int. */

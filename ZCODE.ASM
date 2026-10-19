@@ -62,7 +62,11 @@ INIT
     .ifdef PYLDIN601
     .ifndef CPU6800
     LDAA $E6A0
+    .ifdef __HC11__
+    BITA #16
+    .else
     BITA #2
+    .endif
     BNE VM_INIT_OK
     LDAA #3
     STAA $06
@@ -79,7 +83,11 @@ VM_SERVICE
     .ifdef CPU6800
     CLR $05
     .else
+    .ifdef __HC11__
+    LDAA #2
+    .else
     LDAA #1
+    .endif
     STAA $05
     .endif
     LDX #$5A56
@@ -737,7 +745,11 @@ BDIV_NONZERO
 	INC	DFLAG		; ADJUST SIGN FLAG
 	BSR	NEGATE		; TAKE ABSOLUTE VALUE
 
-BDIV1	PSHB			; FORCE ON STACK
+BDIV1
+    .ifdef __HC11__
+    INCLUDE HC11DIV.INC
+    .else
+    PSHB                        ; FORCE ON STACK
 	PSHA
 	LDAA	#17		; BIT COUNTER
 	PSHA
@@ -795,6 +807,7 @@ UDIV5	INS
 	INS
 	INS
 	RTS
+    .endif
 
 ;----------------------------------------
 ; NEGATE THE VALUE IN A,B
@@ -1238,7 +1251,7 @@ putchar	PROC
 gets	PROC
 	DB	86
 	TSX
-	LDX	2,X GET START OF BUFFER
+	LDX	2,X ; GET START OF BUFFER
 	LDAB	#80		; max buffer size
 	INT	$21
 	CLRA
